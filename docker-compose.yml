@@ -1,0 +1,20 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      APP_ENV: ${APP_ENV:-development}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - infra-net
+
+# `postgres` lives in the separate Infra repo's own Compose project, so it
+# can't be referenced via `depends_on` here. Make sure the Infra stack
+# (docker compose up in /Users/nicolaslallier/Claude/Infra) is already
+# running before starting this service.
+networks:
+  infra-net:
+    external: true
