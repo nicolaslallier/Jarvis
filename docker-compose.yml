@@ -1,6 +1,6 @@
 services:
   api:
-    build: .
+    build: ./backend
     env_file: .env
     environment:
       DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
@@ -11,10 +11,20 @@ services:
     networks:
       - infra-net
 
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+
 # `postgres` lives in the separate Infra repo's own Compose project, so it
 # can't be referenced via `depends_on` here. Make sure the Infra stack
 # (docker compose up in /Users/nicolaslallier/Claude/Infra) is already
-# running before starting this service.
+# running before starting the `api` service. `frontend` only talks to `api`
+# via the browser hitting its published host port, so it doesn't need
+# infra-net.
 networks:
   infra-net:
     external: true

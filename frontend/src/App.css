@@ -1,0 +1,45 @@
+.app {
+  max-width: 480px;
+  margin: 64px auto;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.health-loading {
+  color: var(--text);
+}
+
+.health-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  text-align: left;
+}
+
+.health-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-h);
+}
+
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.health-ok .health-dot {
+  background: #2ecc71;
+}
+
+.health-error .health-dot {
+  background: #e74c3c;
+}
+
+.health-timestamp {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--text);
+}

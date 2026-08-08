@@ -4,17 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-A FastAPI backend lives in `app/`:
+The repo is split into one top-level directory per container, orchestrated centrally by the root `docker-compose.yml` and `Makefile` — `backend/` and `frontend/` today, with more containers expected over time.
 
-- `app/main.py` — FastAPI app, CORS middleware, router registration, startup lifespan (runs `Base.metadata.create_all`).
-- `app/config.py` — `pydantic-settings`-based settings (`DATABASE_URL`, `CORS_ORIGINS`, `APP_ENV`), read from `.env`. Normalizes the `postgres://` scheme to `postgresql+asyncpg://` for SQLAlchemy.
-- `app/db.py` — async SQLAlchemy engine/session setup, `get_db()` dependency, `check_connection()` health helper.
-- `app/models.py` — SQLAlchemy ORM models (currently a minimal `Item` example).
-- `app/schemas.py` — Pydantic request/response models.
-- `app/routers/` — one `APIRouter` per resource (`health.py`, `items.py`).
-- `tests/` — pytest + `httpx` async test client against the ASGI app directly (no live server needed).
+### Backend (`backend/`)
+
+A FastAPI backend lives in `backend/app/`:
+
+- `backend/app/main.py` — FastAPI app, CORS middleware, router registration, startup lifespan (runs `Base.metadata.create_all`).
+- `backend/app/config.py` — `pydantic-settings`-based settings (`DATABASE_URL`, `CORS_ORIGINS`, `APP_ENV`), read from `.env`. Normalizes the `postgres://` scheme to `postgresql+asyncpg://` for SQLAlchemy.
+- `backend/app/db.py` — async SQLAlchemy engine/session setup, `get_db()` dependency, `check_connection()` health helper.
+- `backend/app/models.py` — SQLAlchemy ORM models (currently a minimal `Item` example).
+- `backend/app/schemas.py` — Pydantic request/response models.
+- `backend/app/routers/` — one `APIRouter` per resource (`health.py`, `items.py`).
+- `backend/tests/` — pytest + `httpx` async test client against the ASGI app directly (no live server needed).
 
 No migrations tool yet — schema is created via `create_all` on startup. Add Alembic once the schema needs to evolve past this example.
+
+### Frontend (`frontend/`)
+
+A React + Vite web portal lives in `frontend/`, currently a single page showing live backend health (polls `GET /health` every ~5s). No routing/state library yet — add them only once the portal grows past a single view.
+
+- `frontend/src/useHealthPoll.ts` — polling hook (interval `fetch`, no external data-fetching library), types the `/health` response shape and distinguishes network errors from 503 responses.
+- `frontend/src/HealthStatus.tsx` — renders the polled status.
+- `frontend/Dockerfile` — multi-stage build: `npm run build` then serves the static `dist/` via nginx. `VITE_API_URL` is a **build-time** arg (baked into the static bundle) since it's a browser-facing URL — it must point at the backend's published host port (e.g. `http://localhost:8000`), not an internal Docker network name.
 
 ### Database: uses the Infra repo's Postgres
 
@@ -32,19 +44,26 @@ Infra reserves this app as `jarvis`: database `jarvis`, role `jarvis`, password 
 # one-time: copy env template and set JARVIS_DB_PASSWORD to match Infra's .env
 cp .env.example .env
 
-# build and run (requires Infra's stack + infra-net already up)
+# build and run both containers (requires Infra's stack + infra-net already up)
 docker compose build
 docker compose up -d
 
 # sanity check
 curl http://localhost:8000/health
 curl http://localhost:8000/docs
+open http://localhost:5173   # frontend portal
 
-# tests (in-process ASGI client — no need to build this project's Docker
-# image, but DATABASE_URL must point at a reachable Postgres, e.g. Infra's
-# nginx passthrough at 127.0.0.1:5432)
+# backend tests (in-process ASGI client — no need to build this project's
+# Docker image, but DATABASE_URL must point at a reachable Postgres, e.g.
+# Infra's nginx passthrough at 127.0.0.1:5432)
+cd backend
 pip install -r requirements-dev.txt
 pytest
+
+# frontend local dev (without Docker)
+cd frontend
+npm install
+npm run dev   # http://localhost:5173, calls VITE_API_URL (frontend/.env, defaults to http://localhost:8000)
 ```
 
 Note: `docker-compose.yml` here can't `depends_on` Infra's `postgres` service (it's a different Compose project) — start Infra's stack first.
