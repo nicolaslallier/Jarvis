@@ -4,6 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-This repository is currently a blank slate: a single commit containing only `README.md` (which just says "# Jarvis"). There is no source code, build tooling, package manifest, or test suite yet.
+There is no application source code yet. The repo currently provides a Docker Compose environment: a PostgreSQL database (`db`) and a pgAdmin web UI (`pgadmin`), configured via `docker-compose.yml` and driven through the `Makefile`.
 
-There are no commands to run, no architecture to describe, and no conventions established — because none of that exists yet. When the user starts adding code, update this file to document real build/lint/test commands and the actual architecture as it emerges. Do not invent structure or tooling ahead of what's actually in the repo.
+## Environment
+
+Copy `.env.example` to `.env` and fill in real values (`.env` is git-ignored). Required vars: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PGADMIN_DEFAULT_EMAIL`, `PGADMIN_DEFAULT_PASSWORD`.
+
+Commands (via `make`):
+- `make up` — start the environment (`docker compose up -d`)
+- `make down` — stop it
+- `make logs` — stream logs
+- `make db-shell` — open a `psql` shell in the `db` container
+
+pgAdmin is exposed at `http://localhost:8080`. Inside pgAdmin, register the Postgres server using host `db` (the Docker Compose service name) and port `5432` — containers on the same Compose network resolve each other by service name, not by external/LAN hostnames.
+
+There is no application source code, build tooling, package manifest, or test suite yet. When the user starts adding code, update this file further to document real build/lint/test commands and the actual architecture as it emerges. Do not invent structure or tooling ahead of what's actually in the repo.
