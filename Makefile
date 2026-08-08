@@ -3,7 +3,7 @@
 -include .env
 export
 
-.PHONY: up down logs db-shell info
+.PHONY: up down logs info
 
 up:
 	@echo "🚀 Starting environment..."
@@ -16,10 +16,6 @@ down:
 logs:
 	@echo "📜 Streaming logs..."
 	docker compose logs -f
-
-db-shell:
-	@echo "🐘 Opening database shell..."
-	docker compose exec db psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
 
 info:
 	@echo "📊 Project Metadata:"

@@ -1,7 +1,40 @@
+"""Test fixtures and mocks.
+
+The ``get_settings`` call in ``app.db`` reads ``.env`` at import time.  We
+patch it **before** importing ``app.main`` so the test suite can run without
+a real ``.env`` file or a live Postgres.
+"""
+
+from functools import cached_property
+
 import pytest
+from pytest import MonkeyPatch
+
+
+class _FakeSettings:
+    """Minimal stub so ``app.db`` and ``app.main`` can initialize without a real .env."""
+
+    @cached_property
+    def sqlalchemy_url(self) -> str:
+        return "sqlite+aiosqlite:////:memory:"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return ["*"]
+
+
+# Patch before any app import — fixtures don't run during module load.
+_monkey = MonkeyPatch()
+_monkey.setattr("app.config.get_settings", lambda: _FakeSettings())
+
+# Now safe to import the FastAPI app under test.
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+
+
+def teardown_module() -> None:
+    _monkey.undo()
 
 
 @pytest.fixture

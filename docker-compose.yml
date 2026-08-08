@@ -14,10 +14,21 @@ services:
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     ports:
       - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 # `postgres` lives in the separate Infra repo's own Compose project, so it
 # can't be referenced via `depends_on` here. Make sure the Infra stack
