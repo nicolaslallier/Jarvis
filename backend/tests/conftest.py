@@ -16,7 +16,7 @@ class _FakeSettings:
 
     @cached_property
     def sqlalchemy_url(self) -> str:
-        return "sqlite+aiosqlite:////:memory:"
+        return "sqlite+aiosqlite:///:memory:"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -30,7 +30,8 @@ _monkey.setattr("app.config.get_settings", lambda: _FakeSettings())
 # Now safe to import the FastAPI app under test.
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.db import engine
+from app.main import app, lifespan
 
 
 def teardown_module() -> None:
@@ -39,6 +40,12 @@ def teardown_module() -> None:
 
 @pytest.fixture
 async def client() -> AsyncClient:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    # ``engine`` is a module-level singleton, so its connection pool would
+    # otherwise carry the same in-memory SQLite database (and its rows)
+    # across tests. Dispose it first so ``lifespan``'s create_all opens a
+    # brand new, empty in-memory database for this test.
+    await engine.dispose()
+    async with lifespan(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
