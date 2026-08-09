@@ -28,6 +28,11 @@ class Settings(SharedSettings):
     # per chat message.
     memory_top_k: int = 6
 
+    # How many days ahead of now to look when auto-injecting the "upcoming
+    # appointments" context block into chat (see app/calendar_service.py's
+    # fetch_upcoming, used by app/routers/chat.py).
+    calendar_upcoming_days: int = 7
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

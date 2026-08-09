@@ -29,6 +29,7 @@ class _FakeSettings:
     embedding_lmstudio_model = "test-embedding-model"
     rag_top_k = 4
     memory_top_k = 6
+    calendar_upcoming_days = 7
     otel_exporter_otlp_endpoint = ""
     otel_service_name = "jarvis-api-test"
     minio_endpoint = "http://minio.test:9000"
@@ -45,7 +46,7 @@ _monkey.setattr("app.config.get_settings", lambda: _FakeSettings())
 # Now safe to import the FastAPI app under test.
 from httpx import ASGITransport, AsyncClient
 
-from app.db import engine
+from app.db import Base, engine
 from app.main import app, lifespan
 
 
@@ -73,6 +74,14 @@ async def client() -> AsyncClient:
     # brand new, empty in-memory database for this test.
     await engine.dispose()
     async with lifespan(app):
+        # lifespan's own create_all only creates the pre-Alembic baseline
+        # tables (see main.py's _ALEMBIC_MANAGED_TABLE_NAMES) — there's no
+        # live Alembic run against this in-memory SQLite DB, so tests that
+        # exercise an Alembic-managed table (e.g. appointments) need it
+        # created too. create_all is idempotent per table (checkfirst), so
+        # this only adds the tables lifespan skipped.
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac

@@ -9,8 +9,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.models import FileChunk, Memory
-from app.routers import chat, files, health, ingest_status, items, tasks
+from app.models import Appointment, FileChunk, Memory
+from app.routers import calendar, chat, files, health, ingest_status, items, tasks
 from app.telemetry import setup_telemetry
 from app.ws_manager import manager as ws_manager
 
@@ -19,15 +19,17 @@ settings = get_settings()
 STARTUP_DB_RETRIES = 5
 STARTUP_DB_RETRY_DELAY_SECONDS = 1
 
-# file_chunks and memories both depend on the `vector` Postgres extension (a
-# pgvector column) and are created by Alembic migrations instead, since
-# create_all cannot express "create this extension first". Including them
-# here would make startup fail with "type vector does not exist" on any
-# database that hasn't run those migrations yet. See CLAUDE.md's "Database"
-# section.
-_VECTOR_TABLE_NAMES = {FileChunk.__tablename__, Memory.__tablename__}
+# Tables added after the original create_all baseline are managed by Alembic
+# migrations instead, not this startup create_all — either because
+# create_all can't express what they need (file_chunks/memories depend on
+# the `vector` Postgres extension existing first) or simply to keep the
+# convention consistent for everything added since. Including them here
+# would make startup fail (or silently diverge from what Alembic thinks the
+# schema is) on any database that hasn't run those migrations yet. See
+# CLAUDE.md's "Database" section.
+_ALEMBIC_MANAGED_TABLE_NAMES = {FileChunk.__tablename__, Memory.__tablename__, Appointment.__tablename__}
 _CREATE_ALL_TABLES = [
-    table for table in Base.metadata.tables.values() if table.name not in _VECTOR_TABLE_NAMES
+    table for table in Base.metadata.tables.values() if table.name not in _ALEMBIC_MANAGED_TABLE_NAMES
 ]
 
 
@@ -84,6 +86,7 @@ Instrumentator(
 app.include_router(health.router)
 app.include_router(items.router)
 app.include_router(tasks.router)
+app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(files.router)
 app.include_router(ingest_status.router)

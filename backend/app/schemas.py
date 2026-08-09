@@ -39,6 +39,38 @@ class TaskUpdate(BaseModel):
     due_date: date | None = None
 
 
+class AppointmentCreate(BaseModel):
+    title: str
+    description: str | None = None
+    location: str | None = None
+    start_time: datetime
+    end_time: datetime
+    all_day: bool = False
+
+
+class AppointmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: str | None
+    location: str | None
+    start_time: datetime
+    end_time: datetime
+    all_day: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AppointmentUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    location: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    all_day: bool | None = None
+
+
 class ChatSessionCreate(BaseModel):
     title: str | None = None
 
