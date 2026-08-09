@@ -1,11 +1,22 @@
 import { useEffect, useState } from 'react'
 
+export type TaskStatus = 'todo' | 'doing' | 'done' | 'cancelled'
+export type TaskPriority = 'low' | 'normal' | 'high'
+
 export type Task = {
   id: number
   title: string
   description: string | null
-  due_date: string | null
-  done: boolean
+  due_at: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  completed_at: string | null
+  project: string | null
+  tags: string[] | null
+  parent_id: number | null
+  recurrence_rule: string | null
+  appointment_id: number | null
+  file_id: number | null
   created_at: string
 }
 
@@ -14,7 +25,29 @@ type TasksState =
   | { phase: 'ok'; data: Task[] }
   | { phase: 'error'; message: string }
 
-type NewTask = { title: string; description?: string; due_date?: string }
+export type NewTask = {
+  title: string
+  description?: string
+  due_at?: string
+  priority?: TaskPriority
+  project?: string
+  tags?: string[]
+  parent_id?: number
+}
+
+// Unlike NewTask, every field here that can be cleared accepts an explicit
+// `null` — and JSON.stringify keeps null keys but drops undefined ones, so
+// callers must pass null (not omit the field) to actually clear a value.
+export type TaskUpdateInput = Partial<{
+  title: string
+  description: string | null
+  due_at: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  project: string | null
+  tags: string[] | null
+  parent_id: number | null
+}>
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -99,7 +132,7 @@ export function useTasks() {
     )
   }
 
-  async function updateTask(id: number, input: NewTask): Promise<void> {
+  async function updateTask(id: number, input: TaskUpdateInput): Promise<void> {
     const res = await fetch(`${API_URL}/tasks/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

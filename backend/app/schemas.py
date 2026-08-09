@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -16,10 +16,22 @@ class ItemRead(BaseModel):
     created_at: datetime
 
 
+TaskStatus = Literal["todo", "doing", "done", "cancelled"]
+TaskPriority = Literal["low", "normal", "high"]
+
+
 class TaskCreate(BaseModel):
     title: str
     description: str | None = None
-    due_date: date | None = None
+    due_at: datetime | None = None
+    priority: TaskPriority = "normal"
+    status: TaskStatus = "todo"
+    project: str | None = None
+    tags: list[str] | None = None
+    parent_id: int | None = None
+    recurrence_rule: str | None = None
+    appointment_id: int | None = None
+    file_id: int | None = None
 
 
 class TaskRead(BaseModel):
@@ -28,15 +40,31 @@ class TaskRead(BaseModel):
     id: int
     title: str
     description: str | None
-    due_date: date | None
-    done: bool
+    due_at: datetime | None
+    status: TaskStatus
+    priority: TaskPriority
+    completed_at: datetime | None
+    project: str | None
+    tags: list[str] | None
+    parent_id: int | None
+    recurrence_rule: str | None
+    appointment_id: int | None
+    file_id: int | None
     created_at: datetime
 
 
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
-    due_date: date | None = None
+    due_at: datetime | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    project: str | None = None
+    tags: list[str] | None = None
+    parent_id: int | None = None
+    recurrence_rule: str | None = None
+    appointment_id: int | None = None
+    file_id: int | None = None
 
 
 class AppointmentCreate(BaseModel):
