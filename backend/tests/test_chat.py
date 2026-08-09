@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -294,7 +295,8 @@ async def test_send_message_injects_rag_context_from_matching_chunks(client):
     sent_messages = completion_json["messages"]
     assert sent_messages[0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
     assert sent_messages[1]["role"] == "system"
-    assert "Paris is the capital of France." in sent_messages[1]["content"]
+    assert sent_messages[2]["role"] == "system"
+    assert "Paris is the capital of France." in sent_messages[2]["content"]
     assert sent_messages[-1] == {"role": "user", "content": "What is the capital of France?"}
 
 
@@ -319,10 +321,10 @@ async def test_send_message_skips_context_when_no_chunks_found(client):
 
     assert response.status_code == 200
     _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
-    assert completion_json["messages"] == [
-        {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
-        {"role": "user", "content": "hello"},
-    ]
+    assert completion_json["messages"][0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+    assert completion_json["messages"][1]["role"] == "system"
+    assert completion_json["messages"][2] == {"role": "user", "content": "hello"}
+    assert len(completion_json["messages"]) == 3
 
 
 @pytest.mark.asyncio
@@ -353,10 +355,10 @@ async def test_send_message_continues_when_rag_retrieval_fails(client):
     assert response.status_code == 200
     assert response.json()["assistant_message"]["content"] == "still works"
     _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
-    assert completion_json["messages"] == [
-        {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
-        {"role": "user", "content": "hello"},
-    ]
+    assert completion_json["messages"][0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+    assert completion_json["messages"][1]["role"] == "system"
+    assert completion_json["messages"][2] == {"role": "user", "content": "hello"}
+    assert len(completion_json["messages"]) == 3
 
 
 @pytest.mark.asyncio
@@ -378,6 +380,38 @@ async def test_send_message_always_includes_secretary_persona(client):
         if c.get("messages") and c["messages"][0]["content"] == SECRETARY_SYSTEM_PROMPT
     )
     assert completion_call["messages"][0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+
+
+@pytest.mark.asyncio
+async def test_send_message_grounds_model_in_current_datetime(client):
+    """Without a real "today" anchor, the model resolves relative dates
+    (e.g. "tomorrow") against whatever date it last saw in training, which
+    can be years stale. Every turn must inject the actual current date/time
+    right after the persona prompt so the model — and any calendar tool
+    calls it makes — use the real date."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    frozen_now = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
+    fake_client = _FakeLMStudioClient(response=_ok_response("hi"))
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.datetime") as mock_datetime,
+    ):
+        mock_datetime.now.return_value = frozen_now
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    completion_call = next(
+        c
+        for c in fake_client.calls
+        if c.get("messages") and c["messages"][0]["content"] == SECRETARY_SYSTEM_PROMPT
+    )
+    datetime_message = completion_call["messages"][1]
+    assert datetime_message["role"] == "system"
+    assert "2026-08-09" in datetime_message["content"]
+    assert "Sunday, August 09, 2026" in datetime_message["content"]
 
 
 @pytest.mark.asyncio
@@ -408,7 +442,8 @@ async def test_send_message_injects_memory_context_from_matching_memories(client
     sent_messages = completion_json["messages"]
     assert sent_messages[0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
     assert sent_messages[1]["role"] == "system"
-    assert "The user's dog is named Biscuit." in sent_messages[1]["content"]
+    assert sent_messages[2]["role"] == "system"
+    assert "The user's dog is named Biscuit." in sent_messages[2]["content"]
 
 
 @pytest.mark.asyncio
