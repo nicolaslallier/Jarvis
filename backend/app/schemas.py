@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -30,3 +31,16 @@ class TaskRead(BaseModel):
     due_date: date | None
     done: bool
     created_at: datetime
+
+
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+
+
+class ChatResponse(BaseModel):
+    message: ChatMessage
