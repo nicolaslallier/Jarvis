@@ -76,4 +76,19 @@ class FileRead(BaseModel):
     filename: str
     content_type: str | None
     size: int
+    folder_id: int | None
+    created_at: datetime
+
+
+class FolderCreate(BaseModel):
+    name: str
+    parent_id: int | None = None
+
+
+class FolderRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    parent_id: int | None
     created_at: datetime

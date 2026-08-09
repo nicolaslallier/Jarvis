@@ -54,6 +54,17 @@ class ChatMessageRecord(Base):
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
 
 
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class StoredFile(Base):
     __tablename__ = "files"
 
@@ -64,4 +75,7 @@ class StoredFile(Base):
     # Path inside the MinIO bucket, prefixed with a UUID so same-named
     # uploads never collide.
     object_key: Mapped[str] = mapped_column(String(512), unique=True)
+    folder_id: Mapped[int | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

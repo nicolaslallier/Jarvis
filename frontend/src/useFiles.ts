@@ -5,56 +5,122 @@ export type StoredFile = {
   filename: string
   content_type: string | null
   size: number
+  folder_id: number | null
   created_at: string
 }
 
+export type Folder = {
+  id: number
+  name: string
+  parent_id: number | null
+  created_at: string
+}
+
+export type Crumb = { id: number | null; name: string }
+
 type FilesState =
   | { phase: 'loading' }
-  | { phase: 'ok'; data: StoredFile[] }
+  | { phase: 'ok'; folders: Folder[]; files: StoredFile[] }
   | { phase: 'error'; message: string }
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const ROOT_CRUMB: Crumb = { id: null, name: 'Home' }
 
 async function errorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => null)
   return body?.detail ?? `Backend returned ${res.status}`
 }
 
+function folderIdQuery(folderId: number | null): string {
+  return folderId === null ? '' : `?parent_id=${folderId}`
+}
+
+function filesQuery(folderId: number | null): string {
+  return folderId === null ? '' : `?folder_id=${folderId}`
+}
+
 export function useFiles() {
+  const [breadcrumb, setBreadcrumb] = useState<Crumb[]>([ROOT_CRUMB])
   const [state, setState] = useState<FilesState>({ phase: 'loading' })
 
-  useEffect(() => {
-    let cancelled = false
+  const currentFolderId = breadcrumb[breadcrumb.length - 1].id
 
-    async function load() {
-      try {
-        const res = await fetch(`${API_URL}/files`)
-        if (cancelled) return
+  async function load(folderId: number | null) {
+    setState({ phase: 'loading' })
+    try {
+      const [foldersRes, filesRes] = await Promise.all([
+        fetch(`${API_URL}/folders${folderIdQuery(folderId)}`),
+        fetch(`${API_URL}/files${filesQuery(folderId)}`),
+      ])
 
-        if (res.ok) {
-          const data: StoredFile[] = await res.json()
-          setState({ phase: 'ok', data })
-        } else {
-          setState({ phase: 'error', message: await errorMessage(res) })
-        }
-      } catch (err) {
-        if (cancelled) return
-        setState({
-          phase: 'error',
-          message: `Network error: ${err instanceof Error ? err.message : String(err)}`,
-        })
+      if (!foldersRes.ok) {
+        setState({ phase: 'error', message: await errorMessage(foldersRes) })
+        return
       }
+      if (!filesRes.ok) {
+        setState({ phase: 'error', message: await errorMessage(filesRes) })
+        return
+      }
+
+      const folders: Folder[] = await foldersRes.json()
+      const files: StoredFile[] = await filesRes.json()
+      setState({ phase: 'ok', folders, files })
+    } catch (err) {
+      setState({
+        phase: 'error',
+        message: `Network error: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    }
+  }
+
+  useEffect(() => {
+    load(currentFolderId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentFolderId])
+
+  function openFolder(folder: Folder): void {
+    setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }])
+  }
+
+  function goToCrumb(index: number): void {
+    setBreadcrumb((prev) => prev.slice(0, index + 1))
+  }
+
+  async function createFolder(name: string): Promise<void> {
+    const res = await fetch(`${API_URL}/folders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parent_id: currentFolderId }),
+    })
+
+    if (!res.ok) {
+      throw new Error(await errorMessage(res))
     }
 
-    load()
-    return () => {
-      cancelled = true
+    const created: Folder = await res.json()
+    setState((prev) =>
+      prev.phase === 'ok' ? { ...prev, folders: [...prev.folders, created] } : prev,
+    )
+  }
+
+  async function deleteFolder(id: number): Promise<void> {
+    const res = await fetch(`${API_URL}/folders/${id}`, { method: 'DELETE' })
+
+    if (!res.ok) {
+      throw new Error(await errorMessage(res))
     }
-  }, [])
+
+    setState((prev) =>
+      prev.phase === 'ok' ? { ...prev, folders: prev.folders.filter((f) => f.id !== id) } : prev,
+    )
+  }
 
   async function uploadFile(file: File): Promise<void> {
     const formData = new FormData()
     formData.append('file', file)
+    if (currentFolderId !== null) {
+      formData.append('folder_id', String(currentFolderId))
+    }
 
     const res = await fetch(`${API_URL}/files`, { method: 'POST', body: formData })
 
@@ -64,7 +130,7 @@ export function useFiles() {
 
     const created: StoredFile = await res.json()
     setState((prev) =>
-      prev.phase === 'ok' ? { phase: 'ok', data: [...prev.data, created] } : prev,
+      prev.phase === 'ok' ? { ...prev, files: [...prev.files, created] } : prev,
     )
   }
 
@@ -76,7 +142,7 @@ export function useFiles() {
     }
 
     setState((prev) =>
-      prev.phase === 'ok' ? { phase: 'ok', data: prev.data.filter((f) => f.id !== id) } : prev,
+      prev.phase === 'ok' ? { ...prev, files: prev.files.filter((f) => f.id !== id) } : prev,
     )
   }
 
@@ -84,5 +150,15 @@ export function useFiles() {
     return `${API_URL}/files/${id}/download`
   }
 
-  return { state, uploadFile, deleteFile, downloadUrl }
+  return {
+    state,
+    breadcrumb,
+    openFolder,
+    goToCrumb,
+    createFolder,
+    deleteFolder,
+    uploadFile,
+    deleteFile,
+    downloadUrl,
+  }
 }
