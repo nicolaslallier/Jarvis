@@ -5,6 +5,32 @@
   text-align: center;
 }
 
+.task-count {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+
+.task-count-total {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.task-count-active {
+  color: #e74c3c;
+}
+
+.task-count-done {
+  color: #2ecc71;
+}
+
+.task-count-loading {
+  color: var(--text);
+  font-size: 14px;
+}
+
 .nav {
   display: flex;
   justify-content: center;
