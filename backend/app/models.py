@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -52,3 +52,16 @@ class ChatMessageRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+
+class StoredFile(Base):
+    __tablename__ = "files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str | None] = mapped_column(String(255), default=None)
+    size: Mapped[int] = mapped_column(BigInteger)
+    # Path inside the MinIO bucket, prefixed with a UUID so same-named
+    # uploads never collide.
+    object_key: Mapped[str] = mapped_column(String(512), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

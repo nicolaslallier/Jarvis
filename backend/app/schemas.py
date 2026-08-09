@@ -67,3 +67,13 @@ class ChatSendResponse(BaseModel):
     session: ChatSessionRead
     user_message: ChatMessageRead
     assistant_message: ChatMessageRead
+
+
+class FileRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    content_type: str | None
+    size: int
+    created_at: datetime

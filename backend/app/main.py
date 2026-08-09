@@ -8,7 +8,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.routers import chat, health, items, tasks
+from app.routers import chat, files, health, items, tasks
 from app.telemetry import setup_telemetry
 
 settings = get_settings()
@@ -60,3 +60,4 @@ app.include_router(health.router)
 app.include_router(items.router)
 app.include_router(tasks.router)
 app.include_router(chat.router)
+app.include_router(files.router)
