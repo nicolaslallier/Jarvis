@@ -89,7 +89,7 @@ Infra reserves this app as `jarvis`: database `jarvis`, role `jarvis`, password 
 **Prerequisite before running ingestion:** the `vector` extension (pgvector) must be available in Infra's Postgres before `make migrate` runs.
 - If Infra's Postgres image isn't already pgvector-capable, that's an Infra-repo image swap — this repo can't change what image Infra runs.
 - A Postgres superuser must be able to run `CREATE EXTENSION IF NOT EXISTS vector` against the `jarvis` database — the `jarvis` app role likely lacks that privilege, the same reasoning as why db/role provisioning happens via Infra's superuser `initdb` scripts, not this repo. Whether this becomes part of Infra's `postgres/initdb/10-provision-apps.sh` or a one-off manual step is an Infra-repo decision.
-- `shared/jarvis_shared/migrations/versions/0002_pgvector_ingestion.py` issues the `CREATE EXTENSION` statement itself as a convenience, but will fail with a clear permissions error if Infra hasn't done its part — that failure is the signal to go make the Infra-repo change first, not a bug in the migration.
+- `shared/jarvis_shared/migrations/versions/0003_pgvector_ingestion.py` issues the `CREATE EXTENSION` statement itself as a convenience, but will fail with a clear permissions error if Infra hasn't done its part — that failure is the signal to go make the Infra-repo change first, not a bug in the migration. (`files.ingested_at`, which `GET /files` always selects, was split out into `0002_files_ingested_at.py` so the Files feature isn't blocked on this Infra prerequisite too.)
 
 ## Build / run / test
 

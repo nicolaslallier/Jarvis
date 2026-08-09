@@ -1,7 +1,7 @@
-"""add pgvector extension, files.ingested_at, and file_chunks table
+"""add pgvector extension and file_chunks table
 
-Revision ID: 0002
-Revises: 0001
+Revision ID: 0003
+Revises: 0002
 Create Date: 2026-08-09
 
 """
@@ -12,8 +12,8 @@ from pgvector.sqlalchemy import Vector
 
 from jarvis_shared.models import EMBEDDING_DIMENSIONS
 
-revision = "0002"
-down_revision = "0001"
+revision = "0003"
+down_revision = "0002"
 branch_labels = None
 depends_on = None
 
@@ -26,8 +26,6 @@ def upgrade() -> None:
     # permissions error; that's the signal to go do the Infra-repo step
     # first, not a bug in this migration.
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
-    op.add_column("files", sa.Column("ingested_at", sa.DateTime(timezone=True), nullable=True))
 
     op.create_table(
         "file_chunks",
@@ -46,7 +44,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("file_chunks")
-    op.drop_column("files", "ingested_at")
     # Deliberately not dropping the `vector` extension — other objects might
     # depend on it, and DROP EXTENSION is destructive; leave that to a
     # manual decision if it's ever actually needed.
