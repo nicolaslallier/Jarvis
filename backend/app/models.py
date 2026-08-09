@@ -4,6 +4,7 @@ from jarvis_shared.models import (
     FileChunk,
     Folder,
     Item,
+    Memory,
     StoredFile,
     Task,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "FileChunk",
     "Folder",
     "Item",
+    "Memory",
     "StoredFile",
     "Task",
 ]

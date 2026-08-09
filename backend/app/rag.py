@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.vector_format import format_vector_literal
+
 DEFAULT_TOP_K = 4
 
 _SEARCH_SQL = text(
@@ -26,23 +28,11 @@ class RetrievedChunk:
     distance: float
 
 
-def _format_vector_literal(embedding: list[float]) -> str:
-    """Render pgvector's text input format, e.g. "[0.1,0.2,0.3]".
-
-    Passed as a plain string query parameter and cast with `CAST(... AS
-    vector)` in SQL, so this doesn't need asyncpg's pgvector codec
-    registered on the connection — see jarvis_shared.db.make_engine's
-    register_vector_codec, which backend deliberately leaves off so its DB
-    connection doesn't hard-depend on the vector extension existing.
-    """
-    return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
-
-
 async def fetch_relevant_chunks(
     db: AsyncSession, embedding: list[float], top_k: int = DEFAULT_TOP_K
 ) -> list[RetrievedChunk]:
     result = await db.execute(
-        _SEARCH_SQL, {"query_vector": _format_vector_literal(embedding), "top_k": top_k}
+        _SEARCH_SQL, {"query_vector": format_vector_literal(embedding), "top_k": top_k}
     )
     return [
         RetrievedChunk(

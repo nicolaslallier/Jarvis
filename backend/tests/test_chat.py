@@ -1,9 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
+from app.memory import RetrievedMemory
 from app.rag import RetrievedChunk
+from app.routers.chat import SECRETARY_SYSTEM_PROMPT
 
 
 class _RoutingFakeLMStudioClient:
@@ -43,6 +45,11 @@ class _FakeLMStudioClient:
         self._response = response
         self._error = error
         self.last_json = None
+        # A single fake client instance is reused for every httpx.AsyncClient
+        # call the request makes (embed query, chat completion, extract
+        # memories, embed extracted facts), so `last_json` alone can't tell
+        # them apart — `calls` keeps all of them in order.
+        self.calls: list[dict] = []
 
     async def __aenter__(self):
         return self
@@ -52,6 +59,7 @@ class _FakeLMStudioClient:
 
     async def post(self, *args, **kwargs):
         self.last_json = kwargs.get("json")
+        self.calls.append(self.last_json)
         if self._error is not None:
             raise self._error
         return self._response
@@ -156,8 +164,16 @@ async def test_send_message_sends_full_history_to_lmstudio(client):
     with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client2):
         await client.post(f"/chat/sessions/{session['id']}/messages", json={"content": "two"})
 
-    sent_messages = fake_client2.last_json["messages"]
-    assert [m["content"] for m in sent_messages] == ["one", "first reply", "two"]
+    sent_messages = next(
+        c["messages"]
+        for c in fake_client2.calls
+        if c.get("messages") and c["messages"][0]["content"] == SECRETARY_SYSTEM_PROMPT
+    )
+    assert [m["content"] for m in sent_messages if m["role"] != "system"] == [
+        "one",
+        "first reply",
+        "two",
+    ]
 
 
 @pytest.mark.asyncio
@@ -224,6 +240,7 @@ async def test_send_message_injects_rag_context_from_matching_chunks(client):
     with (
         patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=fake_chunks),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages",
@@ -238,8 +255,9 @@ async def test_send_message_injects_rag_context_from_matching_chunks(client):
 
     _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
     sent_messages = completion_json["messages"]
-    assert sent_messages[0]["role"] == "system"
-    assert "Paris is the capital of France." in sent_messages[0]["content"]
+    assert sent_messages[0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+    assert sent_messages[1]["role"] == "system"
+    assert "Paris is the capital of France." in sent_messages[1]["content"]
     assert sent_messages[-1] == {"role": "user", "content": "What is the capital of France?"}
 
 
@@ -256,6 +274,7 @@ async def test_send_message_skips_context_when_no_chunks_found(client):
     with (
         patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
@@ -263,7 +282,10 @@ async def test_send_message_skips_context_when_no_chunks_found(client):
 
     assert response.status_code == 200
     _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
-    assert completion_json["messages"] == [{"role": "user", "content": "hello"}]
+    assert completion_json["messages"] == [
+        {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
+        {"role": "user", "content": "hello"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -285,6 +307,7 @@ async def test_send_message_continues_when_rag_retrieval_fails(client):
             "app.routers.chat.fetch_relevant_chunks",
             side_effect=Exception("vector extension missing"),
         ),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
@@ -293,4 +316,163 @@ async def test_send_message_continues_when_rag_retrieval_fails(client):
     assert response.status_code == 200
     assert response.json()["assistant_message"]["content"] == "still works"
     _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
-    assert completion_json["messages"] == [{"role": "user", "content": "hello"}]
+    assert completion_json["messages"] == [
+        {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
+        {"role": "user", "content": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_message_always_includes_secretary_persona(client):
+    """The persona system prompt is sent even when there's no memory/RAG
+    context at all — it isn't conditional on retrieval succeeding."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_client = _FakeLMStudioClient(response=_ok_response("hi"))
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    completion_call = next(
+        c
+        for c in fake_client.calls
+        if c.get("messages") and c["messages"][0]["content"] == SECRETARY_SYSTEM_PROMPT
+    )
+    assert completion_call["messages"][0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+
+
+@pytest.mark.asyncio
+async def test_send_message_injects_memory_context_from_matching_memories(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_memories = [
+        RetrievedMemory(id=1, content="The user's dog is named Biscuit.", distance=0.02)
+    ]
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("Biscuit says hi!"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=fake_memories),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "How's my dog doing?"},
+        )
+
+    assert response.status_code == 200
+    _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
+    sent_messages = completion_json["messages"]
+    assert sent_messages[0] == {"role": "system", "content": SECRETARY_SYSTEM_PROMPT}
+    assert sent_messages[1]["role"] == "system"
+    assert "The user's dog is named Biscuit." in sent_messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_continues_when_memory_retrieval_fails(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("still works"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch(
+            "app.routers.chat.fetch_relevant_memories",
+            side_effect=Exception("memories table missing"),
+        ),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == "still works"
+
+
+@pytest.mark.asyncio
+async def test_send_message_stores_extracted_memories(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("Got it, noted!"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch(
+            "app.routers.chat.parse_extracted_facts",
+            return_value=["The user's birthday is on March 3rd."],
+        ),
+        patch("app.routers.chat.store_memories", new_callable=AsyncMock) as mock_store,
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "My birthday is March 3rd, remember that."},
+        )
+
+    assert response.status_code == 200
+    mock_store.assert_awaited_once()
+    _, session_id, facts, embeddings = mock_store.call_args.args
+    assert session_id == session["id"]
+    assert facts == ["The user's birthday is on March 3rd."]
+    assert embeddings == [[0.1, 0.2, 0.3]]
+
+
+@pytest.mark.asyncio
+async def test_send_message_skips_storing_when_no_facts_extracted(client):
+    """A plain "hello" shouldn't produce a memory row — the extraction
+    model's real reply to small talk has no JSON array in it, and
+    parse_extracted_facts (exercised for real here, not mocked) turns that
+    into an empty list."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_client = _FakeLMStudioClient(response=_ok_response("hi there"))
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.store_memories", new_callable=AsyncMock) as mock_store,
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    mock_store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_continues_when_memory_extraction_fails(client):
+    """Memory extraction is best-effort — a crash while parsing the
+    extraction reply must not take down an otherwise-successful chat send."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_client = _FakeLMStudioClient(response=_ok_response("hi there"))
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch(
+            "app.routers.chat.parse_extracted_facts",
+            side_effect=Exception("boom"),
+        ),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == "hi there"

@@ -24,6 +24,10 @@ class Settings(SharedSettings):
     # How many file_chunks to retrieve as context per chat message.
     rag_top_k: int = 4
 
+    # How many memories (see backend/app/memory.py) to retrieve as context
+    # per chat message.
+    memory_top_k: int = 6
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
