@@ -23,6 +23,9 @@ class _FakeSettings:
     minio_bucket = "jarvis-test"
     embedding_lmstudio_base_url = "http://lmstudio.test"
     embedding_lmstudio_model = "test-embedding-model"
+    vision_lmstudio_base_url = "http://lmstudio.test"
+    vision_lmstudio_model = "test-vision-model"
+    vision_description_prompt = "Describe this image for a search index."
     chunk_size_chars = 20
     chunk_overlap_chars = 5
 
