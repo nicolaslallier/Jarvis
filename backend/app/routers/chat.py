@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -6,9 +7,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import ChatMessageRecord, ChatSession
+from app.rag import fetch_relevant_chunks, format_context
 from app.schemas import (
     ChatMessageRead,
     ChatSendRequest,
@@ -18,11 +20,41 @@ from app.schemas import (
     ChatSessionRead,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 LMSTUDIO_TIMEOUT_SECONDS = 120.0
+EMBEDDING_TIMEOUT_SECONDS = 30.0
 DEFAULT_SESSION_TITLE = "New chat"
 TITLE_MAX_LENGTH = 50
+
+
+async def _build_rag_context(db: AsyncSession, settings: Settings, query: str) -> str | None:
+    """Best-effort: embeds the user's message and looks up the closest
+    file_chunks so the model can ground its reply in the user's uploaded
+    documents. Any failure here (LM Studio unreachable, vector
+    extension/table not available yet, no chunks at all) just means no
+    context gets added — RAG is a quality boost, not a chat dependency, so
+    it must never be the reason a chat message fails to send.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=EMBEDDING_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{settings.embedding_lmstudio_base_url}/v1/embeddings",
+                json={"model": settings.embedding_lmstudio_model, "input": [query]},
+            )
+        if response.status_code != 200:
+            logger.warning("RAG embedding call returned %s", response.status_code)
+            return None
+        embedding = response.json()["data"][0]["embedding"]
+        chunks = await fetch_relevant_chunks(db, embedding, top_k=settings.rag_top_k)
+        if not chunks:
+            return None
+        return format_context(chunks)
+    except Exception:
+        logger.warning("RAG context retrieval failed", exc_info=True)
+        return None
 
 
 def _title_from_content(content: str) -> str:
@@ -90,11 +122,16 @@ async def send_message(
     settings = get_settings()
     history = [{"role": m.role, "content": m.content} for m in session.messages]
 
+    rag_context = await _build_rag_context(db, settings, payload.content)
+    messages_for_model = history
+    if rag_context is not None:
+        messages_for_model = [{"role": "system", "content": rag_context}] + history
+
     try:
         async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 f"{settings.lmstudio_base_url}/v1/chat/completions",
-                json={"model": settings.lmstudio_model, "messages": history},
+                json={"model": settings.lmstudio_model, "messages": messages_for_model},
             )
     except httpx.RequestError as exc:
         raise HTTPException(

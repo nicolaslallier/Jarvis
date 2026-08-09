@@ -14,6 +14,16 @@ class Settings(SharedSettings):
     lmstudio_base_url: str = "http://host.docker.internal:1234"
     lmstudio_model: str = "google/gemma-4-26b-a4b-qat"
 
+    # Same LM Studio embeddings endpoint ingest uses to embed file chunks
+    # (see ingest/app/config.py) — reuses the EMBEDDING_LMSTUDIO_* env vars
+    # so both containers stay pointed at the same model. A query embedded
+    # with a different model than the chunks isn't comparable to them.
+    embedding_lmstudio_base_url: str = "http://host.docker.internal:1234"
+    embedding_lmstudio_model: str = "text-embedding-nomic-embed-text-v1.5"
+
+    # How many file_chunks to retrieve as context per chat message.
+    rag_top_k: int = 4
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

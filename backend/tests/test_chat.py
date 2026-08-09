@@ -3,6 +3,36 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from app.rag import RetrievedChunk
+
+
+class _RoutingFakeLMStudioClient:
+    """Like _FakeLMStudioClient, but returns a different canned response per
+    URL. Needed once a message triggers two outbound calls (embed the query,
+    then complete the chat) that must be told apart."""
+
+    def __init__(self, responses: dict[str, httpx.Response]):
+        self._responses = responses
+        self.calls: list[tuple[str, dict]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def post(self, url, **kwargs):
+        self.calls.append((url, kwargs.get("json")))
+        return self._responses[url]
+
+
+def _embedding_response(vector: list[float]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"data": [{"index": 0, "embedding": vector}]},
+        request=httpx.Request("POST", "http://lmstudio.test/v1/embeddings"),
+    )
+
 
 class _FakeLMStudioClient:
     """Stand-in for the httpx.AsyncClient the chat router opens to call LM
@@ -170,3 +200,97 @@ async def test_send_message_upstream_error_status(client):
 
     assert response.status_code == 502
     assert "LM Studio returned 500" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_injects_rag_context_from_matching_chunks(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_chunks = [
+        RetrievedChunk(
+            file_id=1,
+            filename="notes.txt",
+            chunk_index=0,
+            chunk_text="Paris is the capital of France.",
+            distance=0.05,
+        )
+    ]
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("Paris!"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=fake_chunks),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "What is the capital of France?"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == "Paris!"
+
+    embed_url, embed_json = next(c for c in fake_client.calls if c[0].endswith("/v1/embeddings"))
+    assert embed_json["input"] == ["What is the capital of France?"]
+
+    _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
+    sent_messages = completion_json["messages"]
+    assert sent_messages[0]["role"] == "system"
+    assert "Paris is the capital of France." in sent_messages[0]["content"]
+    assert sent_messages[-1] == {"role": "user", "content": "What is the capital of France?"}
+
+
+@pytest.mark.asyncio
+async def test_send_message_skips_context_when_no_chunks_found(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("hi there"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
+    assert completion_json["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_send_message_continues_when_rag_retrieval_fails(client):
+    """RAG is a quality boost, not a chat dependency — a broken vector
+    lookup (e.g. the pgvector extension not provisioned yet) must not stop
+    the message from sending."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    responses = {
+        "http://lmstudio.test/v1/embeddings": _embedding_response([0.1, 0.2, 0.3]),
+        "http://lmstudio.test/v1/chat/completions": _ok_response("still works"),
+    }
+    fake_client = _RoutingFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch(
+            "app.routers.chat.fetch_relevant_chunks",
+            side_effect=Exception("vector extension missing"),
+        ),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == "still works"
+    _, completion_json = next(c for c in fake_client.calls if c[0].endswith("/v1/chat/completions"))
+    assert completion_json["messages"] == [{"role": "user", "content": "hello"}]
