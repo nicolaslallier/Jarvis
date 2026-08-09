@@ -9,8 +9,7 @@ import pytest
 
 from app.memory import RetrievedMemory
 from app.rag import RetrievedChunk
-from app.routers import chat as chat_module
-from app.routers.chat import CALENDAR_TOOLS, SECRETARY_SYSTEM_PROMPT
+from app.routers.chat import SECRETARY_SYSTEM_PROMPT, TOOLS
 
 STREAM_URL = "http://lmstudio.test/v1/chat/completions"
 EMBED_URL = "http://lmstudio.test/v1/embeddings"
@@ -754,9 +753,11 @@ async def test_send_message_first_completion_call_offers_calendar_tools(client):
         )
 
     assert response.status_code == 200
-    _, sent_json = fake_client.stream_calls[0]
-    assert sent_json["tools"] == CALENDAR_TOOLS
-    assert sent_json["tool_choice"] == "auto"
+    _, completion_json = next(
+        c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")
+    )
+    assert completion_json["tools"] == TOOLS
+    assert completion_json["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -812,51 +813,43 @@ async def test_send_message_executes_calendar_tool_call(client):
     titles = [a["title"] for a in list_response.json()]
     assert "Dentist" in titles
 
-    assert len(fake_client.stream_calls) == 2
-    assert fake_client.stream_calls[0][1]["tools"] == CALENDAR_TOOLS
-    followup_payload = fake_client.stream_calls[1][1]
+    # First two completions calls are the tool-call round trip; a possible
+    # third is the best-effort memory-extraction call that runs after
+    # (unrelated to tool calling, and this fake client has no response
+    # queued for it, so it fails harmlessly — see other memory tests).
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    assert completion_calls[0][1]["tools"] == TOOLS
+    followup_payload = completion_calls[1][1]
+    assert "tools" not in followup_payload
     tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
     result = json.loads(tool_message["content"])
     assert result["appointment"]["title"] == "Dentist"
 
 
 @pytest.mark.asyncio
-async def test_send_message_chains_multiple_tool_calls(client):
-    """The tool-calling loop lets the model act on a tool result within the
-    same turn — e.g. list appointments, then update the one the user meant
-    — instead of stopping after a single round trip."""
+async def test_send_message_executes_task_tool_call(client):
+    """Same round trip as the calendar tool test above, but for the task
+    tools: a create_task tool call results in a real task row."""
     session = (await client.post("/chat/sessions", json={})).json()
 
-    created = (
-        await client.post(
-            "/calendar/appointments",
-            json={
-                "title": "Dentist",
-                "start_time": "2026-09-01T15:00:00+00:00",
-                "end_time": "2026-09-01T15:30:00+00:00",
-            },
-        )
-    ).json()
-
-    list_call = [{"id": "call_1", "function": {"name": "list_appointments", "arguments": "{}"}}]
-    update_call = [
+    tool_calls = [
         {
-            "id": "call_2",
+            "id": "call_1",
+            "type": "function",
             "function": {
-                "name": "update_appointment",
-                "arguments": json.dumps({"id": created["id"], "start_time": "2026-09-01T16:00:00+00:00"}),
+                "name": "create_task",
+                "arguments": json.dumps({"title": "Buy corn", "priority": "high"}),
             },
         }
     ]
-    fake_client = _FakeLMStudioClient(
-        stream_responses={
-            STREAM_URL: [
-                _tool_call_stream(list_call),
-                _tool_call_stream(update_call),
-                _content_stream("Moved your dentist appointment to 4pm."),
-            ]
-        }
-    )
+    responses = {
+        "http://lmstudio.test/v1/chat/completions": [
+            _tool_call_response(tool_calls),
+            _ok_response("Added \"Buy corn\" to your tasks."),
+        ],
+    }
+    fake_client = _SequentialFakeLMStudioClient(responses)
 
     with (
         patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
@@ -865,19 +858,23 @@ async def test_send_message_chains_multiple_tool_calls(client):
     ):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages",
-            json={"content": "move my dentist appointment to 4pm"},
+            json={"content": "remind me to buy corn"},
         )
 
     assert response.status_code == 200
-    events = _parse_sse(response.text)
-    tool_call_names = [e["name"] for e in events if e["type"] == "tool_call"]
-    assert tool_call_names == ["list_appointments", "update_appointment"]
-    done = next(e for e in events if e["type"] == "done")
-    assert done["assistant_message"]["content"] == "Moved your dentist appointment to 4pm."
+    assert response.json()["assistant_message"]["content"] == 'Added "Buy corn" to your tasks.'
 
-    assert len(fake_client.stream_calls) == 3
-    detail = (await client.get(f"/calendar/appointments/{created['id']}")).json()
-    assert detail["start_time"].startswith("2026-09-01T16:00:00")
+    list_response = await client.get("/tasks")
+    titles = [t["title"] for t in list_response.json()]
+    assert "Buy corn" in titles
+
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    followup_payload = completion_calls[1][1]
+    tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
+    result = json.loads(tool_message["content"])
+    assert result["task"]["title"] == "Buy corn"
+    assert result["task"]["priority"] == "high"
 
 
 @pytest.mark.asyncio
@@ -906,9 +903,11 @@ async def test_send_message_falls_back_when_tools_rejected(client):
         )
 
     assert response.status_code == 200
-    done = next(e for e in _parse_sse(response.text) if e["type"] == "done")
-    assert done["assistant_message"]["content"] == "plain reply"
+    assert response.json()["assistant_message"]["content"] == "plain reply"
 
-    assert len(fake_client.stream_calls) == 2
-    assert fake_client.stream_calls[0][1]["tools"] == CALENDAR_TOOLS
-    assert "tools" not in fake_client.stream_calls[1][1]
+    # First two completions calls are the tools-rejected retry round trip; a
+    # possible third is the best-effort memory-extraction call afterward.
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    assert completion_calls[0][1]["tools"] == TOOLS
+    assert "tools" not in completion_calls[1][1]

@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.image_description import ImageDescriptionError, describe_image
+from app.image_description import ImageDescriptionError, describe_image, describe_pdf_pages
 
 
 def _settings() -> Settings:
@@ -77,3 +77,43 @@ async def test_describe_image_raises_on_unexpected_response_shape():
     with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=canned_response)):
         with pytest.raises(ImageDescriptionError, match="Unexpected response shape"):
             await describe_image(_settings(), "photo.png", "image/png", b"fake-bytes")
+
+
+@pytest.mark.asyncio
+async def test_describe_image_uses_pdf_ocr_prompt_when_given():
+    canned_response = httpx.Response(
+        200,
+        json={"choices": [{"message": {"content": "transcribed text"}}]},
+        request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
+    )
+    with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=canned_response)) as mock_post:
+        await describe_image(_settings(), "doc.pdf#page-1.png", "image/png", b"fake-bytes", prompt="transcribe this")
+
+    _, kwargs = mock_post.call_args
+    assert kwargs["json"]["messages"][0]["content"][0]["text"] == "transcribe this"
+
+
+@pytest.mark.asyncio
+async def test_describe_pdf_pages_joins_per_page_transcriptions_in_order():
+    responses = iter(
+        [
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "page one text"}}]},
+                request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
+            ),
+            httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "page two text"}}]},
+                request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
+            ),
+        ]
+    )
+
+    async def fake_post(self, *args, **kwargs):
+        return next(responses)
+
+    with patch("httpx.AsyncClient.post", new=fake_post):
+        result = await describe_pdf_pages(_settings(), "scanned.pdf", [b"page-1-bytes", b"page-2-bytes"])
+
+    assert result == "[Page 1]\npage one text\n\n[Page 2]\npage two text"

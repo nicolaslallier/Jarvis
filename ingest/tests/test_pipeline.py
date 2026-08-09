@@ -259,6 +259,79 @@ async def test_pdf_file_is_extracted_chunked_and_embedded(session):
 
 
 @pytest.mark.asyncio
+async def test_scanned_pdf_falls_back_to_vision_ocr_when_text_extraction_is_empty(session):
+    file = await _add_file(session, object_key="k9", filename="scanned.pdf", content_type="application/pdf")
+
+    async def fake_embed(settings, chunks):
+        return [[0.1, 0.2, 0.3] for _ in chunks]
+
+    async def fake_describe_pdf_pages(settings, filename, page_images):
+        assert filename == "scanned.pdf"
+        assert page_images == [b"page-1-png"]
+        return "a" * 30
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k9": _blank_pdf_bytes()})),
+        patch("app.pipeline.extract_text", return_value=""),
+        patch("app.pipeline.render_pdf_pages_to_png", return_value=[b"page-1-png"]),
+        patch("app.pipeline.describe_pdf_pages", side_effect=fake_describe_pdf_pages),
+        patch("app.pipeline.embed_chunks", side_effect=fake_embed),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert len(result.scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_scanned_pdf_vision_ocr_failure_leaves_file_unprocessed(session):
+    file = await _add_file(session, object_key="k10", filename="scanned.pdf", content_type="application/pdf")
+
+    async def fake_describe_pdf_pages_fail(settings, filename, page_images):
+        raise ImageDescriptionError("boom")
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k10": _blank_pdf_bytes()})),
+        patch("app.pipeline.extract_text", return_value=""),
+        patch("app.pipeline.render_pdf_pages_to_png", return_value=[b"page-1-png"]),
+        patch("app.pipeline.describe_pdf_pages", side_effect=fake_describe_pdf_pages_fail),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (0, 1)
+
+    await session.refresh(file)
+    assert file.ingested_at is None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert result.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_pdf_with_extractable_text_does_not_invoke_vision_fallback(session):
+    file = await _add_file(session, object_key="k11", filename="doc.pdf", content_type="application/pdf")
+
+    async def fake_embed(settings, chunks):
+        return [[0.1, 0.2, 0.3] for _ in chunks]
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k11": _blank_pdf_bytes()})),
+        patch("app.pipeline.extract_text", return_value="a" * 30),
+        patch("app.pipeline.render_pdf_pages_to_png") as mock_render,
+        patch("app.pipeline.embed_chunks", side_effect=fake_embed),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+    mock_render.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_unparseable_pdf_is_skipped_but_stamped(session):
     file = await _add_file(session, object_key="k6", filename="broken.pdf", content_type="application/pdf")
 

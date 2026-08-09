@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app import calendar_service
+from app import calendar_service, task_service
 from app.config import Settings, get_settings
 from app.db import async_session, get_db
 from app.memory import (
@@ -21,7 +21,7 @@ from app.memory import (
     parse_extracted_facts,
     store_memories,
 )
-from app.models import Appointment, ChatMessageRecord, ChatSession
+from app.models import Appointment, ChatMessageRecord, ChatSession, Task
 from app.rag import fetch_relevant_chunks, format_context
 from app.schemas import (
     ChatMessageRead,
@@ -63,19 +63,15 @@ SECRETARY_SYSTEM_PROMPT = (
     "You can only create, move, or cancel calendar appointments by calling "
     "the list_appointments/create_appointment/update_appointment/"
     "delete_appointment tools — you have no other way to change the "
-    "calendar. Never tell the user an appointment was added, moved, or "
-    "cancelled unless you actually called the matching tool in this turn "
-    "and it returned success; if you didn't call it, say so instead of "
-    "confirming the change. You can chain multiple tool calls in the same "
-    "turn — e.g. list appointments first, then update the one the user "
-    "meant — instead of asking the user to repeat information you can look "
-    "up yourself."
-)
-
-TITLE_GENERATION_SYSTEM_PROMPT = (
-    "Summarize the user's message as a short chat title of 3 to 6 words. "
-    "Respond with only the title text — no quotes, no punctuation at the "
-    "end, no preamble."
+    "calendar. You can only create, update, complete, or list the user's "
+    "tasks by calling the list_tasks/create_task/update_task/complete_task "
+    "tools — you have no other way to change their tasks. When a request "
+    "naturally breaks into several steps (e.g. \"organize Sunday dinner\"), "
+    "create one parent task and add the steps as separate tasks with "
+    "parent_id set to the parent's id. Never tell the user an appointment "
+    "or task was added, changed, or completed unless you actually called "
+    "the matching tool in this turn and it returned success; if you didn't "
+    "call it, say so instead of confirming the change."
 )
 
 # OpenAI-compatible tool schema letting the model manage the user's calendar
@@ -158,6 +154,87 @@ CALENDAR_TOOLS = [
         },
     },
 ]
+
+# Same idea as CALENDAR_TOOLS, for the user's task list. Kept as a separate
+# list (both are passed together to the model, see TOOLS below) so each
+# domain's tool set stays easy to read on its own.
+TASK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tasks",
+            "description": "List the user's tasks, optionally filtered by status or project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["todo", "doing", "done", "cancelled"],
+                    },
+                    "project": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_task",
+            "description": (
+                "Create a new task. For a multi-step request, first create the parent "
+                "task, then create each step as its own task with parent_id set to the "
+                "parent's id."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "due_at": {"type": "string", "description": "ISO 8601 datetime"},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                    "project": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "parent_id": {"type": "integer", "description": "Id of the parent task, if this is a subtask"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task",
+            "description": "Update an existing task. Only the fields provided are changed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "due_at": {"type": "string", "description": "ISO 8601 datetime"},
+                    "status": {"type": "string", "enum": ["todo", "doing", "done", "cancelled"]},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+                    "project": {"type": "string"},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_task",
+            "description": "Mark a task as done.",
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}},
+                "required": ["id"],
+            },
+        },
+    },
+]
+
+TOOLS = CALENDAR_TOOLS + TASK_TOOLS
 
 
 # Fire-and-forget tasks (memory extraction, title generation) are started
@@ -297,6 +374,20 @@ async def _build_calendar_context(db: AsyncSession, settings: Settings) -> str |
         return None
 
 
+async def _build_task_context(db: AsyncSession) -> str | None:
+    """Best-effort counterpart to _build_calendar_context, surfacing the
+    user's open tasks so the model can answer "what's on my plate" style
+    questions without needing a tool call."""
+    try:
+        tasks = await task_service.fetch_active(db)
+        if not tasks:
+            return None
+        return task_service.format_active_context(tasks)
+    except Exception:
+        logger.warning("Task context retrieval failed", exc_info=True)
+        return None
+
+
 def _parse_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -358,12 +449,77 @@ async def _execute_calendar_tool_call(db: AsyncSession, name: str, arguments: di
         return {"error": str(exc)}
 
 
-async def _stream_attempt(settings: Settings, messages: list[dict], tools: list[dict] | None):
-    """Opens one streaming LM Studio chat-completion call and yields event
-    dicts as the response arrives:
-      {"kind": "delta", "text": str}                         -- a content chunk
-      {"kind": "final", "content": str, "tool_calls": list | None}  -- always
-        the last event yielded, once the stream ends normally.
+def _task_to_dict(task: Task) -> dict:
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "due_at": task.due_at.isoformat() if task.due_at else None,
+        "status": task.status,
+        "priority": task.priority,
+        "project": task.project,
+        "tags": task.tags,
+        "parent_id": task.parent_id,
+    }
+
+
+async def _execute_task_tool_call(db: AsyncSession, name: str, arguments: dict) -> dict:
+    """Runs one task tool call the model requested, same error-as-payload
+    convention as _execute_calendar_tool_call above."""
+    try:
+        if name == "list_tasks":
+            tasks = await task_service.list_tasks(
+                db, status=arguments.get("status"), project=arguments.get("project")
+            )
+            return {"tasks": [_task_to_dict(t) for t in tasks]}
+        if name == "create_task":
+            task = await task_service.create_task(
+                db,
+                title=arguments["title"],
+                description=arguments.get("description"),
+                due_at=_parse_datetime(arguments["due_at"]) if arguments.get("due_at") else None,
+                priority=arguments.get("priority", "normal"),
+                project=arguments.get("project"),
+                tags=arguments.get("tags"),
+                parent_id=arguments.get("parent_id"),
+            )
+            return {"task": _task_to_dict(task)}
+        if name == "update_task":
+            fields = {k: v for k, v in arguments.items() if k != "id"}
+            if "due_at" in fields:
+                fields["due_at"] = _parse_datetime(fields["due_at"])
+            task = await task_service.update_task(db, arguments["id"], **fields)
+            if task is None:
+                return {"error": f"no task with id {arguments['id']}"}
+            return {"task": _task_to_dict(task)}
+        if name == "complete_task":
+            task = await task_service.complete_task(db, arguments["id"])
+            if task is None:
+                return {"error": f"no task with id {arguments['id']}"}
+            return {"task": _task_to_dict(task)}
+        return {"error": f"unknown tool {name}"}
+    except Exception as exc:
+        logger.warning("Task tool call %s failed", name, exc_info=True)
+        return {"error": str(exc)}
+
+
+_TASK_TOOL_NAMES = {"list_tasks", "create_task", "update_task", "complete_task"}
+
+
+async def _execute_tool_call(db: AsyncSession, name: str, arguments: dict) -> dict:
+    """Dispatches a model-requested tool call to the calendar or task
+    executor based on its name."""
+    if name in _TASK_TOOL_NAMES:
+        return await _execute_task_tool_call(db, name, arguments)
+    return await _execute_calendar_tool_call(db, name, arguments)
+
+
+def _extract_message(data: dict) -> dict:
+    try:
+        return data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
+
 
     Raises `_ToolsRejected` if the call was made with `tools` set and LM
     Studio rejected it outright (some model/version combos don't support
@@ -711,6 +867,7 @@ async def send_message(
     memory_context = await _build_memory_context(db, settings, embedding)
     rag_context = await _build_rag_context(db, settings, embedding)
     calendar_context = await _build_calendar_context(db, settings)
+    task_context = await _build_task_context(db)
 
     context_messages = [
         {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
@@ -722,10 +879,66 @@ async def send_message(
         context_messages.append({"role": "system", "content": rag_context})
     if calendar_context is not None:
         context_messages.append({"role": "system", "content": calendar_context})
+    if task_context is not None:
+        context_messages.append({"role": "system", "content": task_context})
     messages_for_model = context_messages + history
 
-    return StreamingResponse(
-        _stream_send_message(db, settings, session, user_message, messages_for_model),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    response = await _call_lmstudio(settings, messages_for_model, tools=TOOLS)
+    if response.status_code != 200:
+        # Some LM Studio/model combinations reject the `tools` field
+        # outright — retry once without it so chat still works. Tool
+        # calling is a capability boost, never a reason a message fails.
+        response = await _call_lmstudio(settings, messages_for_model, tools=None)
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502, detail=f"LM Studio returned {response.status_code}: {response.text}"
+        )
+
+    message = _extract_message(response.json())
+
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        assistant_tool_message = {
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": tool_calls,
+        }
+        tool_result_messages = []
+        for call in tool_calls:
+            function = call.get("function", {})
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            result = await _execute_tool_call(db, function.get("name", ""), arguments)
+            tool_result_messages.append(
+                {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
+            )
+
+        followup_response = await _call_lmstudio(
+            settings, messages_for_model + [assistant_tool_message] + tool_result_messages, tools=None
+        )
+        if followup_response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"LM Studio returned {followup_response.status_code}: {followup_response.text}",
+            )
+        message = _extract_message(followup_response.json())
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio")
+
+    assistant_message = ChatMessageRecord(session_id=session.id, role="assistant", content=content)
+    db.add(assistant_message)
+    await db.commit()
+    await db.refresh(session)
+    await db.refresh(assistant_message)
+
+    await _record_memories(db, settings, session.id, payload.content, content)
+
+    return ChatSendResponse(
+        session=ChatSessionRead.model_validate(session),
+        user_message=ChatMessageRead.model_validate(user_message),
+        assistant_message=ChatMessageRead.model_validate(assistant_message),
     )

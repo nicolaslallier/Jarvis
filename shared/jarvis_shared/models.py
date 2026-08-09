@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from jarvis_shared.db import Base
@@ -23,14 +23,30 @@ class Item(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+TASK_STATUSES = ("todo", "doing", "done", "cancelled")
+TASK_PRIORITIES = ("low", "normal", "high")
+
+
 class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(String(2000), default=None)
-    due_date: Mapped[date | None] = mapped_column(Date, default=None)
-    done: Mapped[bool] = mapped_column(default=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    status: Mapped[str] = mapped_column(String(20), default="todo")
+    priority: Mapped[str] = mapped_column(String(10), default="normal")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    project: Mapped[str | None] = mapped_column(String(100), default=None)
+    tags: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), default=None
+    )
+    recurrence_rule: Mapped[str | None] = mapped_column(String(255), default=None)
+    appointment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"), default=None
+    )
+    file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
