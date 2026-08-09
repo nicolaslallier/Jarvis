@@ -5,6 +5,8 @@ asyncpg
 greenlet
 pydantic-settings
 httpx
+boto3
+python-multipart
 prometheus-fastapi-instrumentator
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
