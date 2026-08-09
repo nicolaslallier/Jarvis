@@ -102,3 +102,27 @@ class FileChunk(Base):
     chunk_text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Memory(Base):
+    """A durable fact learned about the user from a chat exchange (identity,
+    preferences, recurring commitments, ongoing projects — see
+    backend/app/memory.py's extraction prompt for the exact criteria), kept
+    across chat sessions and retrieved by embedding similarity on later
+    messages. The counterpart to FileChunk, but for facts learned in
+    conversation rather than uploaded documents.
+    """
+
+    __tablename__ = "memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    # The session the fact was learned in, kept only for traceability — not
+    # used to scope retrieval, since the whole point is recall *across*
+    # sessions. SET NULL on session delete so deleting a chat thread doesn't
+    # discard facts already folded into long-term memory.
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

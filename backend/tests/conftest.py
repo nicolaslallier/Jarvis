@@ -28,6 +28,7 @@ class _FakeSettings:
     embedding_lmstudio_base_url = "http://lmstudio.test"
     embedding_lmstudio_model = "test-embedding-model"
     rag_top_k = 4
+    memory_top_k = 6
     otel_exporter_otlp_endpoint = ""
     otel_service_name = "jarvis-api-test"
     minio_endpoint = "http://minio.test:9000"

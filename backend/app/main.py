@@ -9,7 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.models import FileChunk
+from app.models import FileChunk, Memory
 from app.routers import chat, files, health, ingest_status, items, tasks
 from app.telemetry import setup_telemetry
 from app.ws_manager import manager as ws_manager
@@ -19,13 +19,15 @@ settings = get_settings()
 STARTUP_DB_RETRIES = 5
 STARTUP_DB_RETRY_DELAY_SECONDS = 1
 
-# file_chunks depends on the `vector` Postgres extension (a pgvector column)
-# and is created by Alembic migration 0002 instead, since create_all cannot
-# express "create this extension first". Including it here would make
-# startup fail with "type vector does not exist" on any database that
-# hasn't run that migration yet. See CLAUDE.md's "Database" section.
+# file_chunks and memories both depend on the `vector` Postgres extension (a
+# pgvector column) and are created by Alembic migrations instead, since
+# create_all cannot express "create this extension first". Including them
+# here would make startup fail with "type vector does not exist" on any
+# database that hasn't run those migrations yet. See CLAUDE.md's "Database"
+# section.
+_VECTOR_TABLE_NAMES = {FileChunk.__tablename__, Memory.__tablename__}
 _CREATE_ALL_TABLES = [
-    table for table in Base.metadata.tables.values() if table.name != FileChunk.__tablename__
+    table for table in Base.metadata.tables.values() if table.name not in _VECTOR_TABLE_NAMES
 ]
 
 
