@@ -129,12 +129,6 @@ class ChatSendRequest(BaseModel):
     content: str
 
 
-class ChatSendResponse(BaseModel):
-    session: ChatSessionRead
-    user_message: ChatMessageRead
-    assistant_message: ChatMessageRead
-
-
 class FileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
