@@ -10,8 +10,9 @@ The repo is split into one top-level directory per container, orchestrated centr
 
 A FastAPI backend lives in `backend/app/`:
 
-- `backend/app/main.py` — FastAPI app, CORS middleware, router registration, startup lifespan (runs `Base.metadata.create_all`).
-- `backend/app/config.py` — `pydantic-settings`-based settings (`DATABASE_URL`, `CORS_ORIGINS`, `APP_ENV`), read from `.env`. Normalizes the `postgres://` scheme to `postgresql+asyncpg://` for SQLAlchemy.
+- `backend/app/main.py` — FastAPI app, CORS middleware, Prometheus `/metrics`, router registration, startup lifespan (runs `Base.metadata.create_all`).
+- `backend/app/telemetry.py` — OpenTelemetry setup (OTLP/HTTP traces + logging instrumentation); no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty.
+- `backend/app/config.py` — `pydantic-settings`-based settings (`DATABASE_URL`, `CORS_ORIGINS`, `APP_ENV`, OTEL vars), read from `.env`. Normalizes the `postgres://` scheme to `postgresql+asyncpg://` for SQLAlchemy.
 - `backend/app/db.py` — async SQLAlchemy engine/session setup, `get_db()` dependency, `check_connection()` health helper.
 - `backend/app/models.py` — SQLAlchemy ORM models (currently a minimal `Item` example).
 - `backend/app/schemas.py` — Pydantic request/response models.
