@@ -87,5 +87,17 @@ export function useTasks() {
     )
   }
 
-  return { state, createTask, completeTask }
+  async function deleteTask(id: number): Promise<void> {
+    const res = await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' })
+
+    if (!res.ok) {
+      throw new Error(await errorMessage(res))
+    }
+
+    setState((prev) =>
+      prev.phase === 'ok' ? { phase: 'ok', data: prev.data.filter((t) => t.id !== id) } : prev,
+    )
+  }
+
+  return { state, createTask, completeTask, deleteTask }
 }

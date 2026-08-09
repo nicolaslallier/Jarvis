@@ -54,3 +54,23 @@ async def test_complete_task_not_found(client):
     response = await client.post("/tasks/999999/complete")
     assert response.status_code == 404
     assert response.json()["detail"] == "task not found"
+
+
+@pytest.mark.asyncio
+async def test_delete_task(client):
+    create_response = await client.post("/tasks", json={"title": "Delete me"})
+    task_id = create_response.json()["id"]
+
+    response = await client.delete(f"/tasks/{task_id}")
+    assert response.status_code == 204
+
+    list_response = await client.get("/tasks")
+    titles = [t["title"] for t in list_response.json()]
+    assert "Delete me" not in titles
+
+
+@pytest.mark.asyncio
+async def test_delete_task_not_found(client):
+    response = await client.delete("/tasks/999999")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task not found"

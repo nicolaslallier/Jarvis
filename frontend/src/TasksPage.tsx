@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { useTasks } from './useTasks'
 
 export default function TasksPage() {
-  const { state, createTask, completeTask } = useTasks()
+  const { state, createTask, completeTask, deleteTask } = useTasks()
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [dueDate, setDueDate] = useState('')
@@ -77,6 +77,13 @@ export default function TasksPage() {
                   Mark done
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => deleteTask(task.id)}
+                className="task-delete"
+              >
+                Delete
+              </button>
             </li>
           ))}
         </ul>
