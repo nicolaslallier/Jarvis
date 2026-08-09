@@ -12,8 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY batch/app ./app
 
-RUN useradd --create-home appuser
-USER appuser
+# Stays root: this container talks to /var/run/docker.sock (see
+# docker-compose.yml's `batch` service and CLAUDE.md's security note),
+# and a non-root user without a group matching the mounted socket's host
+# GID gets PermissionError connecting to it. Docker socket access is
+# root-equivalent regardless of in-container UID, so dropping privilege
+# here buys no real isolation anyway.
 
 EXPOSE 8080
 
