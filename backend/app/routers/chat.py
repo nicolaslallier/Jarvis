@@ -521,6 +521,13 @@ def _extract_message(data: dict) -> dict:
         raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
 
 
+async def _stream_attempt(settings: Settings, messages: list[dict], tools: list[dict] | None):
+    """Opens one streaming LM Studio chat-completion call and yields event
+    dicts as the response arrives:
+      {"kind": "delta", "text": str}                         -- a content chunk
+      {"kind": "final", "content": str, "tool_calls": list | None}  -- always
+        the last event yielded, once the stream ends normally.
+
     Raises `_ToolsRejected` if the call was made with `tools` set and LM
     Studio rejected it outright (some model/version combos don't support
     tool calling) — the caller retries once without tools. Raises
