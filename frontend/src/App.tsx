@@ -6,6 +6,8 @@ import TasksPage from './TasksPage'
 import ChatPage from './ChatPage'
 import FilesPage from './FilesPage'
 import CalendarPage from './CalendarPage'
+import MemoryPage from './MemoryPage'
+import DailyBriefing from './DailyBriefing'
 import './App.css'
 
 function App() {
@@ -13,19 +15,22 @@ function App() {
     <main className="app">
       <nav className="nav">
         <NavLink to="/" end className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
-          Home
+          Accueil
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Tâches
         </NavLink>
         <NavLink to="/calendar" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
-          Calendar
+          Calendrier
         </NavLink>
         <NavLink to="/chat" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Chat
         </NavLink>
         <NavLink to="/files" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
-          Files
+          Fichiers
+        </NavLink>
+        <NavLink to="/memory" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
+          Mémoire
         </NavLink>
       </nav>
       <Routes>
@@ -37,6 +42,7 @@ function App() {
               <SessionTimer />
               <TaskCountWidget />
               <HealthStatus />
+              <DailyBriefing />
             </>
           }
         />
@@ -44,6 +50,7 @@ function App() {
         <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/files" element={<FilesPage />} />
+        <Route path="/memory" element={<MemoryPage />} />
       </Routes>
     </main>
   )

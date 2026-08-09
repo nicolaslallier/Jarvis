@@ -63,7 +63,7 @@ export default function FilesPage() {
   }
 
   async function handleDeleteFolder(folder: Folder) {
-    if (!confirm(`Delete folder "${folder.name}" and everything inside it?`)) return
+    if (!confirm(`Supprimer le dossier « ${folder.name} » et tout son contenu ?`)) return
     try {
       await deleteFolder(folder.id)
     } catch (err) {
@@ -89,7 +89,7 @@ export default function FilesPage() {
 
   return (
     <div className="files">
-      <h1>Files</h1>
+      <h1>Fichiers</h1>
 
       <nav className="files-breadcrumb">
         {breadcrumb.map((crumb, index) => (
@@ -110,30 +110,30 @@ export default function FilesPage() {
         <form className="files-new-folder" onSubmit={handleCreateFolder}>
           <input
             type="text"
-            placeholder="New folder name"
+            placeholder="Nom du dossier"
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
             disabled={creatingFolder}
           />
           <button type="submit" disabled={creatingFolder || !newFolderName.trim()}>
-            New folder
+            Nouveau dossier
           </button>
         </form>
 
         <div className="files-upload">
           <input ref={inputRef} type="file" onChange={handleFileChange} disabled={uploading} />
-          {uploading && <span className="files-uploading">Uploading…</span>}
+          {uploading && <span className="files-uploading">Envoi en cours…</span>}
         </div>
       </div>
 
       {formError && <p className="files-form-error">{formError}</p>}
 
-      {state.phase === 'loading' && <p className="files-loading">Loading files…</p>}
+      {state.phase === 'loading' && <p className="files-loading">Chargement des fichiers…</p>}
       {state.phase === 'error' && <p className="files-form-error">{state.message}</p>}
       {state.phase === 'ok' && (
         <ul className="files-list">
           {state.folders.length === 0 && state.files.length === 0 && (
-            <li className="files-empty">This folder is empty.</li>
+            <li className="files-empty">Ce dossier est vide.</li>
           )}
           {state.folders.map((folder) => (
             <li key={`folder-${folder.id}`} className="file-item folder-item">
@@ -143,7 +143,7 @@ export default function FilesPage() {
                 </button>
               </div>
               <button type="button" onClick={() => handleDeleteFolder(folder)} className="file-delete">
-                Delete
+                Supprimer
               </button>
             </li>
           ))}
@@ -153,7 +153,7 @@ export default function FilesPage() {
                 <a href={downloadUrl(file.id)}>{file.filename}</a>
                 <span className="file-size">{formatSize(file.size)}</span>
                 <span className={`file-ingest-badge ${file.ingested_at ? 'is-indexed' : 'is-pending'}`}>
-                  {file.ingested_at ? 'Indexed' : 'Pending'}
+                  {file.ingested_at ? 'Indexé' : 'En attente'}
                 </span>
               </div>
               <div className="file-item-actions">
@@ -168,7 +168,7 @@ export default function FilesPage() {
                   </button>
                 )}
                 <button type="button" onClick={() => handleDelete(file.id)} className="file-delete">
-                  Delete
+                  Supprimer
                 </button>
               </div>
             </li>

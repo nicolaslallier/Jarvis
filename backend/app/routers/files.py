@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -15,6 +16,8 @@ from app.config import get_settings
 from app.db import get_db
 from app.models import Folder, StoredFile
 from app.schemas import FileRead, FolderCreate, FolderRead
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -71,6 +74,21 @@ async def upload_file(
     db.add(db_file)
     await db.commit()
     await db.refresh(db_file)
+
+    try:
+        await publish_message(
+            settings.rabbitmq_url,
+            INGEST_REQUESTED_QUEUE,
+            {"file_id": db_file.id, "requested_at": datetime.now(UTC).isoformat()},
+        )
+    except AMQP_CONNECTION_EXCEPTIONS as exc:
+        logger.warning(
+            "Could not publish auto-ingest request for file %s at %s: %s",
+            db_file.id,
+            settings.rabbitmq_url,
+            exc,
+        )
+
     return db_file
 
 

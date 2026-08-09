@@ -1,7 +1,19 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from botocore.exceptions import ClientError
+
+
+@pytest.fixture(autouse=True)
+def _mock_ingest_publish():
+    """upload_file() now fires an auto-ingest publish_message() call on every
+    upload (see test_files_ingest.py for dedicated coverage of that
+    behavior). Stub it out by default here so these MinIO/folder-focused
+    tests don't depend on a live RabbitMQ; a test can still override this
+    with its own ``patch(...)`` for the duration of its own ``with`` block.
+    """
+    with patch("app.routers.files.publish_message", new_callable=AsyncMock) as mock_publish:
+        yield mock_publish
 
 
 class _FakeS3Client:

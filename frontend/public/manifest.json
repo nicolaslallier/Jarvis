@@ -1,0 +1,17 @@
+{
+  "name": "Jarvis",
+  "short_name": "Jarvis",
+  "description": "Assistant secrétaire personnel.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#863bff",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    }
+  ]
+}

@@ -17,16 +17,16 @@ export default function SessionTimer() {
       <div className="session-timer-controls">
         {!running ? (
           <button className="session-timer-btn" onClick={start}>
-            {elapsed > 0 ? 'Resume' : 'Start'}
+            {elapsed > 0 ? 'Reprendre' : 'Démarrer'}
           </button>
         ) : (
           <button className="session-timer-btn" onClick={stop}>
-            Stop
+            Arrêter
           </button>
         )}
         {elapsed > 0 && (
           <button className="session-timer-btn" onClick={reset}>
-            Reset
+            Réinitialiser
           </button>
         )}
       </div>

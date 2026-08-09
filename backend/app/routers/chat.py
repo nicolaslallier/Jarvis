@@ -22,7 +22,7 @@ from app.memory import (
     store_memories,
 )
 from app.models import Appointment, ChatMessageRecord, ChatSession, Task
-from app.rag import fetch_relevant_chunks, format_context
+from app.rag import RetrievedChunk, fetch_relevant_chunks, format_context
 from app.schemas import (
     ChatMessageRead,
     ChatSendRequest,
@@ -303,23 +303,25 @@ async def _embed_text(settings: Settings, query: str) -> list[float] | None:
 
 async def _build_rag_context(
     db: AsyncSession, settings: Settings, embedding: list[float] | None
-) -> str | None:
+) -> tuple[str | None, list[RetrievedChunk]]:
     """Best-effort: looks up the closest file_chunks to `embedding` so the
     model can ground its reply in the user's uploaded documents. Any
     failure here (vector extension/table not available yet, no chunks at
     all) just means no context gets added — RAG is a quality boost, not a
-    chat dependency.
+    chat dependency. Returns both the formatted context string (injected as
+    a system message) and the raw chunk list (so the caller can also surface
+    which sources were used, for display, without a second retrieval call).
     """
     if embedding is None:
-        return None
+        return None, []
     try:
         chunks = await fetch_relevant_chunks(db, embedding, top_k=settings.rag_top_k)
         if not chunks:
-            return None
-        return format_context(chunks)
+            return None, []
+        return format_context(chunks), chunks
     except Exception:
         logger.warning("RAG context retrieval failed", exc_info=True)
-        return None
+        return None, []
 
 
 async def _build_memory_context(
@@ -740,17 +742,26 @@ async def _stream_send_message(
     session: ChatSession,
     user_message: ChatMessageRecord,
     messages_for_model: list[dict],
+    sources: list[dict],
 ):
     """The SSE response body for POST /chat/sessions/{id}/messages. Runs the
     tool-calling loop (up to MAX_TOOL_ITERATIONS) against streaming LM
     Studio calls, relaying content deltas to the client as they arrive, then
     persists the assistant's reply and fires memory extraction off the
     critical path before sending the final `done` event.
+
+    `sources` is the lightweight, display-only view of the RAG chunks (if
+    any) used to build the RAG context system message already folded into
+    `messages_for_model` — relayed to the client as its own `sources` event
+    so the UI can show which files/excerpts were used, without re-sending
+    the (already-truncated) context string itself.
     """
     yield _sse(
         {"type": "user_message", "message": ChatMessageRead.model_validate(user_message).model_dump(mode="json")}
     )
     yield _sse({"type": "session", "session": ChatSessionRead.model_validate(session).model_dump(mode="json")})
+    if sources:
+        yield _sse({"type": "sources", "sources": sources})
 
     messages = list(messages_for_model)
     tools_supported = True
@@ -871,9 +882,13 @@ async def send_message(
 
     embedding = await _embed_text(settings, payload.content)
     memory_context = await _build_memory_context(db, settings, embedding)
-    rag_context = await _build_rag_context(db, settings, embedding)
+    rag_context, rag_chunks = await _build_rag_context(db, settings, embedding)
     calendar_context = await _build_calendar_context(db, settings)
     task_context = await _build_task_context(db)
+    sources = [
+        {"filename": c.filename, "chunk_index": c.chunk_index, "excerpt": c.chunk_text[:200]}
+        for c in rag_chunks
+    ]
 
     context_messages = [
         {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
@@ -890,6 +905,6 @@ async def send_message(
     messages_for_model = context_messages + history
 
     return StreamingResponse(
-        _stream_send_message(db, settings, session, user_message, messages_for_model),
+        _stream_send_message(db, settings, session, user_message, messages_for_model, sources),
         media_type="text/event-stream",
     )

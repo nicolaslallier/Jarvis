@@ -6,7 +6,8 @@
 }
 
 .app:has(.calendar),
-.app:has(.tasks) {
+.app:has(.tasks),
+.app:has(.memory-page) {
   max-width: 760px;
 }
 
@@ -38,6 +39,7 @@
 
 .nav {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 16px;
   margin-bottom: 24px;
@@ -816,6 +818,7 @@
 
 .calendar-month-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 12px;
@@ -824,6 +827,7 @@
 
 .calendar-month-nav button {
   font: inherit;
+  flex: 0 1 auto;
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -836,6 +840,25 @@
   min-width: 160px;
   text-align: center;
   color: var(--text-h);
+}
+
+@media (max-width: 480px) {
+  .calendar-month-nav {
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .calendar-month-label {
+    order: -1;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .calendar-month-nav button {
+    flex: 1 1 auto;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
 }
 
 .calendar-grid {
@@ -1022,4 +1045,264 @@
   background: var(--bg);
   color: var(--text-h);
   cursor: pointer;
+}
+
+/* ---- Daily briefing (Home page) ---- */
+
+.briefing {
+  text-align: left;
+  margin-bottom: 24px;
+}
+
+.briefing-title {
+  margin: 0 0 12px;
+}
+
+.briefing-summary {
+  color: var(--text-h);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.briefing-loading,
+.briefing-error {
+  color: var(--text);
+}
+
+.briefing-error {
+  color: #e74c3c;
+}
+
+.briefing-section {
+  margin-bottom: 16px;
+}
+
+.briefing-section-title {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.briefing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.briefing-appointment,
+.briefing-task {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text-h);
+}
+
+.briefing-item-time {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.briefing-item-title {
+  flex: 1;
+}
+
+.briefing-overdue .briefing-section-title {
+  color: #e74c3c;
+}
+
+.briefing-task-overdue {
+  border-color: #e74c3c;
+}
+
+.briefing-task-overdue .briefing-item-title {
+  color: #e74c3c;
+  font-weight: 600;
+}
+
+/* ---- Memory page ---- */
+
+.memory-page {
+  text-align: left;
+}
+
+.memory-loading,
+.memory-empty {
+  color: var(--text);
+}
+
+.memory-form-error {
+  color: #e74c3c;
+}
+
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.memory-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.memory-content {
+  margin: 0;
+  color: var(--text-h);
+  white-space: pre-wrap;
+}
+
+.memory-item-meta {
+  display: flex;
+  margin-top: 6px;
+}
+
+.memory-created-at {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.memory-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.memory-item button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.memory-delete {
+  color: #e74c3c;
+  border-color: #e74c3c;
+}
+
+.memory-edit-btn {
+  color: #3498db;
+  border-color: #3498db;
+}
+
+.memory-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-edit-textarea {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+  min-height: 80px;
+}
+
+.memory-edit-textarea:focus {
+  outline: 2px solid var(--accent);
+}
+
+.memory-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.memory-edit-actions button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.memory-row-error {
+  color: #e74c3c;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+/* ---- Chat UX additions: session search, stop button, sources, copy ---- */
+
+.chat-session-search {
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.chat-stop {
+  font: inherit;
+  padding: 8px 16px;
+  border: 1px solid #e74c3c;
+  border-radius: 6px;
+  background: var(--bg);
+  color: #e74c3c;
+  cursor: pointer;
+}
+
+.chat-message-copy {
+  font: inherit;
+  font-size: 12px;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.chat-message-sources {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.chat-message-sources-label {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.chat-message-sources ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.chat-message-source-filename {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.chat-message-source-excerpt {
+  color: var(--text);
 }

@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 
+export type ChatSource = {
+  filename: string
+  chunk_index: number
+  excerpt: string
+}
+
 export type ChatMessage = {
   id: number
   role: 'system' | 'user' | 'assistant'
   content: string
   created_at: string
+  // Client-side only: which RAG chunks (if any) backed this reply. Never
+  // persisted/returned by the backend (see chat.py's `sources` SSE event,
+  // sent once per turn but not stored on ChatMessageRecord), so this is
+  // absent again after a page reload / session reselect — that's expected,
+  // sources are ephemeral per-turn context, not stored history.
+  sources?: ChatSource[]
 }
 
 export type ChatSession = {
@@ -31,6 +43,7 @@ type MessagesState =
 type ChatStreamEvent =
   | { type: 'user_message'; message: ChatMessage }
   | { type: 'session'; session: ChatSession }
+  | { type: 'sources'; sources: ChatSource[] }
   | { type: 'delta'; content: string }
   | { type: 'tool_call'; name: string }
   | { type: 'done'; assistant_message: ChatMessage; session: ChatSession }
@@ -85,6 +98,11 @@ export function useChat() {
   const [state, setState] = useState<MessagesState>({ phase: 'idle' })
   const [toolActivity, setToolActivity] = useState<string | null>(null)
   const lastFailedMessage = useRef<string | null>(null)
+  // Holds the AbortController for the in-flight sendMessage() fetch, if
+  // any, so stopGeneration() can cancel it. Cleared once the stream ends
+  // (successfully, on error, or on abort) so a stale controller can't be
+  // aborted a second time.
+  const activeAbortController = useRef<AbortController | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -223,11 +241,15 @@ export function useChat() {
     setState({ phase: 'sending' })
     setToolActivity(null)
 
+    const controller = new AbortController()
+    activeAbortController.current = controller
+
     try {
       const res = await fetch(`${API_URL}/chat/sessions/${sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
+        signal: controller.signal,
       })
 
       if (!res.ok || !res.body) {
@@ -244,6 +266,10 @@ export function useChat() {
       let streamedContent = ''
       let sawAssistantPlaceholder = false
       let streamError: string | null = null
+      // 'sources' arrives (if at all) right after 'session' and before any
+      // 'delta', so it's known by the time the assistant placeholder is
+      // first created below.
+      let streamedSources: ChatSource[] | undefined
 
       for await (const event of readSseEvents(res.body)) {
         if (event.type === 'user_message') {
@@ -260,6 +286,8 @@ export function useChat() {
                 }
               : prev,
           )
+        } else if (event.type === 'sources') {
+          streamedSources = event.sources
         } else if (event.type === 'delta') {
           streamedContent += event.content
           setToolActivity(null)
@@ -270,6 +298,7 @@ export function useChat() {
               role: 'assistant',
               content: streamedContent,
               created_at: new Date().toISOString(),
+              sources: streamedSources,
             }
             setMessages((prev) => [...prev, placeholder])
           } else {
@@ -284,7 +313,10 @@ export function useChat() {
         } else if (event.type === 'done') {
           setMessages((prev) => [
             ...prev.filter((m) => m.id !== STREAMING_ASSISTANT_ID),
-            event.assistant_message,
+            // The backend never persists sources on ChatMessageRecord (see
+            // ChatMessage.sources above), so event.assistant_message never
+            // carries them — attach the ones collected client-side here.
+            { ...event.assistant_message, sources: streamedSources },
           ])
           setToolActivity(null)
         }
@@ -299,9 +331,35 @@ export function useChat() {
       lastFailedMessage.current = null
       setState({ phase: 'idle' })
     } catch (err) {
+      // Aborted via stopGeneration(): not a failure, so don't set
+      // lastFailedMessage (retry doesn't apply) or surface an error state —
+      // just keep whatever partial content already streamed in as the
+      // final message content. Note the backend never persists this
+      // partial reply: _stream_send_message's generator gets torn down via
+      // GeneratorExit before it reaches its db.add(assistant_message) call,
+      // so reselecting this session later won't show it — accepted
+      // limitation, not something to fix here.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        // Give the finalized-in-place placeholder a fresh negative id (like
+        // optimisticUser above) so it stops matching STREAMING_ASSISTANT_ID
+        // — otherwise a later message's delta handler could mistake it for
+        // its own in-progress placeholder and overwrite/merge into it.
+        setMessages((prev) =>
+          prev.map((m) => (m.id === STREAMING_ASSISTANT_ID ? { ...m, id: -Date.now() } : m)),
+        )
+        setToolActivity(null)
+        setState({ phase: 'idle' })
+        return
+      }
       lastFailedMessage.current = content
       setState({ phase: 'error', message: networkErrorMessage(err) })
+    } finally {
+      activeAbortController.current = null
     }
+  }
+
+  function stopGeneration(): void {
+    activeAbortController.current?.abort()
   }
 
   async function retryLastMessage(): Promise<void> {
@@ -321,6 +379,7 @@ export function useChat() {
     createSession,
     deleteSession,
     sendMessage,
+    stopGeneration,
     retryLastMessage,
   }
 }

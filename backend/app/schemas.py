@@ -129,6 +129,27 @@ class ChatSendRequest(BaseModel):
     content: str
 
 
+class MemoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    content: str
+    session_id: int | None
+    created_at: datetime
+
+
+class MemoryUpdate(BaseModel):
+    content: str
+
+
+class BriefingRead(BaseModel):
+    date: str
+    appointments: list[AppointmentRead]
+    due_tasks: list[TaskRead]
+    overdue_tasks: list[TaskRead]
+    summary: str | None
+
+
 class FileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
