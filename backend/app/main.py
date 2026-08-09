@@ -8,6 +8,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
+from app.models import FileChunk
 from app.routers import chat, files, health, items, tasks
 from app.telemetry import setup_telemetry
 
@@ -15,6 +16,15 @@ settings = get_settings()
 
 STARTUP_DB_RETRIES = 5
 STARTUP_DB_RETRY_DELAY_SECONDS = 1
+
+# file_chunks depends on the `vector` Postgres extension (a pgvector column)
+# and is created by Alembic migration 0002 instead, since create_all cannot
+# express "create this extension first". Including it here would make
+# startup fail with "type vector does not exist" on any database that
+# hasn't run that migration yet. See CLAUDE.md's "Database" section.
+_CREATE_ALL_TABLES = [
+    table for table in Base.metadata.tables.values() if table.name != FileChunk.__tablename__
+]
 
 
 @asynccontextmanager
@@ -25,7 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for attempt in range(1, STARTUP_DB_RETRIES + 1):
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(Base.metadata.create_all, tables=_CREATE_ALL_TABLES)
             break
         except OSError:
             if attempt == STARTUP_DB_RETRIES:
