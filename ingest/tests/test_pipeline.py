@@ -1,6 +1,7 @@
 from io import BytesIO
 from unittest.mock import patch
 
+import docx
 import pytest
 from jarvis_shared.db import Base
 from jarvis_shared.models import FileChunk, StoredFile
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.config import Settings
 from app.embeddings import EmbeddingError
 from app.image_description import ImageDescriptionError
-from app.pipeline import extract_text, is_image, is_pdf, is_supported_text, run_pipeline
+from app.pipeline import extract_text, is_docx, is_image, is_pdf, is_supported_text, run_pipeline
 
 
 class _FakeBody:
@@ -113,8 +114,8 @@ async def test_unsupported_content_type_is_skipped_but_stamped(session):
     file = await _add_file(
         session,
         object_key="k3",
-        filename="report.docx",
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="archive.zip",
+        content_type="application/zip",
     )
 
     succeeded, failed = await run_pipeline(session, _settings())
@@ -336,6 +337,84 @@ async def test_unparseable_pdf_is_skipped_but_stamped(session):
     file = await _add_file(session, object_key="k6", filename="broken.pdf", content_type="application/pdf")
 
     with patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k6": b"not a real pdf"})):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert result.scalars().all() == []
+
+
+_DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _docx_bytes(paragraphs: list[str]) -> bytes:
+    document = docx.Document()
+    for paragraph in paragraphs:
+        document.add_paragraph(paragraph)
+    buf = BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+def test_is_docx_by_content_type():
+    assert is_docx("report.docx", _DOCX_CONTENT_TYPE) is True
+    assert is_docx("report.docx", "text/plain") is False
+
+
+def test_is_docx_by_extension_when_content_type_missing():
+    assert is_docx("report.docx", None) is True
+    assert is_docx("report.txt", None) is False
+
+
+def test_is_supported_text_includes_docx():
+    assert is_supported_text("report.docx", _DOCX_CONTENT_TYPE) is True
+    assert is_supported_text("report.docx", None) is True
+
+
+def test_extract_text_reads_docx_paragraphs():
+    raw = _docx_bytes(["First paragraph.", "Second paragraph.", "Third paragraph."])
+    assert extract_text("report.docx", _DOCX_CONTENT_TYPE, raw) == (
+        "First paragraph.\nSecond paragraph.\nThird paragraph."
+    )
+
+
+def test_extract_text_skips_empty_docx_paragraphs():
+    raw = _docx_bytes(["First paragraph.", "", "Third paragraph."])
+    assert extract_text("report.docx", _DOCX_CONTENT_TYPE, raw) == "First paragraph.\nThird paragraph."
+
+
+@pytest.mark.asyncio
+async def test_docx_file_is_extracted_chunked_and_embedded(session):
+    file = await _add_file(session, object_key="k12", filename="report.docx", content_type=_DOCX_CONTENT_TYPE)
+    raw = _docx_bytes(["a" * 15, "b" * 15])
+
+    async def fake_embed(settings, chunks):
+        return [[0.1, 0.2, 0.3] for _ in chunks]
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k12": raw})),
+        patch("app.pipeline.embed_chunks", side_effect=fake_embed),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert len(result.scalars().all()) > 0
+
+
+@pytest.mark.asyncio
+async def test_unparseable_docx_is_skipped_but_stamped(session):
+    file = await _add_file(session, object_key="k13", filename="broken.docx", content_type=_DOCX_CONTENT_TYPE)
+
+    with patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k13": b"not a real docx"})):
         succeeded, failed = await run_pipeline(session, _settings())
 
     assert (succeeded, failed) == (1, 0)

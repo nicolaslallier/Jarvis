@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { useCalendar } from './useCalendar'
 import type { Appointment } from './useCalendar'
 
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const WEEKDAY_LABELS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -107,7 +107,7 @@ export default function CalendarPage() {
     const startTime = new Date(form.startTime)
     const endTime = new Date(form.endTime)
     if (endTime < startTime) {
-      setFormError('End time must be after start time.')
+      setFormError("L'heure de fin doit être après l'heure de début.")
       return
     }
 
@@ -145,25 +145,25 @@ export default function CalendarPage() {
 
   return (
     <div className="calendar">
-      <h1>Calendar</h1>
+      <h1>Calendrier</h1>
 
-      {state.phase === 'loading' && <p className="calendar-loading">Loading appointments…</p>}
+      {state.phase === 'loading' && <p className="calendar-loading">Chargement des rendez-vous…</p>}
       {state.phase === 'error' && <p className="calendar-form-error">{state.message}</p>}
 
       {state.phase !== 'loading' && (
         <>
           <div className="calendar-month-nav">
             <button type="button" onClick={() => goToMonth(-1)}>
-              ← Prev
+              ← Préc.
             </button>
             <strong className="calendar-month-label">
               {monthStart.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
             </strong>
             <button type="button" onClick={() => goToMonth(1)}>
-              Next →
+              Suiv. →
             </button>
             <button type="button" onClick={() => setMonthStart(new Date(today.getFullYear(), today.getMonth(), 1))}>
-              Today
+              Aujourd'hui
             </button>
           </div>
 
@@ -207,7 +207,7 @@ export default function CalendarPage() {
                       </span>
                     ))}
                     {dayAppointments.length > 3 && (
-                      <span className="calendar-chip-more">+{dayAppointments.length - 3} more</span>
+                      <span className="calendar-chip-more">+{dayAppointments.length - 3} autres</span>
                     )}
                   </span>
                 </button>
@@ -225,7 +225,7 @@ export default function CalendarPage() {
             </h2>
 
             {selectedAppointments.length === 0 && (
-              <p className="calendar-empty">No appointments this day.</p>
+              <p className="calendar-empty">Aucun rendez-vous ce jour-là.</p>
             )}
             <ul className="calendar-appointment-list">
               {selectedAppointments.map((a) => (
@@ -234,7 +234,7 @@ export default function CalendarPage() {
                     <strong>{a.title}</strong>
                     <span className="calendar-appointment-time">
                       {a.all_day
-                        ? 'All day'
+                        ? 'Toute la journée'
                         : `${new Date(a.start_time).toLocaleTimeString(undefined, {
                             hour: 'numeric',
                             minute: '2-digit',
@@ -248,10 +248,10 @@ export default function CalendarPage() {
                   {a.description && <p className="calendar-appointment-description">{a.description}</p>}
                   <div className="calendar-appointment-actions">
                     <button type="button" onClick={() => startEdit(a)}>
-                      Edit
+                      Modifier
                     </button>
                     <button type="button" className="calendar-delete" onClick={() => handleDelete(a.id)}>
-                      Delete
+                      Supprimer
                     </button>
                   </div>
                 </li>
@@ -259,10 +259,10 @@ export default function CalendarPage() {
             </ul>
 
             <form className="calendar-form" onSubmit={handleSubmit}>
-              <h3>{editingId !== null ? 'Edit appointment' : 'New appointment'}</h3>
+              <h3>{editingId !== null ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</h3>
               <input
                 type="text"
-                placeholder="Title"
+                placeholder="Titre"
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                 required
@@ -273,7 +273,7 @@ export default function CalendarPage() {
                   checked={form.allDay}
                   onChange={(e) => setForm((f) => ({ ...f, allDay: e.target.checked }))}
                 />
-                All day
+                Toute la journée
               </label>
               <div className="calendar-form-times">
                 <label>
@@ -307,20 +307,20 @@ export default function CalendarPage() {
               </div>
               <input
                 type="text"
-                placeholder="Location (optional)"
+                placeholder="Lieu (optionnel)"
                 value={form.location}
                 onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
               />
               <textarea
-                placeholder="Description (optional)"
+                placeholder="Description (optionnel)"
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               />
               <div className="calendar-form-actions">
-                <button type="submit">{editingId !== null ? 'Save' : 'Add appointment'}</button>
+                <button type="submit">{editingId !== null ? 'Enregistrer' : 'Ajouter le rendez-vous'}</button>
                 {editingId !== null && (
                   <button type="button" onClick={cancelEdit}>
-                    Cancel
+                    Annuler
                   </button>
                 )}
               </div>

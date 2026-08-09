@@ -458,6 +458,87 @@ async def test_send_message_injects_rag_context_from_matching_chunks(client):
 
 
 @pytest.mark.asyncio
+async def test_send_message_emits_sources_event_from_matching_chunks(client):
+    """The frontend needs to show which files/excerpts backed a reply, so
+    the raw RAG chunk list (not just the formatted context string folded
+    into the system message) must also come through as its own SSE event,
+    sent right after the `session` event and before any `delta`s."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_chunks = [
+        RetrievedChunk(
+            file_id=1,
+            filename="notes.txt",
+            chunk_index=0,
+            chunk_text="Paris is the capital of France. " * 20,
+            distance=0.05,
+        ),
+        RetrievedChunk(
+            file_id=2,
+            filename="atlas.pdf",
+            chunk_index=3,
+            chunk_text="France is in Europe.",
+            distance=0.09,
+        ),
+    ]
+    fake_client = _FakeLMStudioClient(
+        post_responses={EMBED_URL: _embedding_response([0.1, 0.2, 0.3])},
+        stream_responses={STREAM_URL: _content_stream("Paris!")},
+    )
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=fake_chunks),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "What is the capital of France?"},
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+
+    sources_event = next(e for e in events if e["type"] == "sources")
+    assert sources_event["sources"] == [
+        {
+            "filename": "notes.txt",
+            "chunk_index": 0,
+            "excerpt": ("Paris is the capital of France. " * 20)[:200],
+        },
+        {"filename": "atlas.pdf", "chunk_index": 3, "excerpt": "France is in Europe."},
+    ]
+
+    # sources arrives after session but before any delta/done events.
+    types = [e["type"] for e in events]
+    assert types.index("sources") > types.index("session")
+    assert types.index("sources") < types.index("delta")
+
+
+@pytest.mark.asyncio
+async def test_send_message_omits_sources_event_when_no_chunks_found(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    fake_client = _FakeLMStudioClient(
+        post_responses={EMBED_URL: _embedding_response([0.1, 0.2, 0.3])},
+        stream_responses={STREAM_URL: _content_stream("hi there")},
+    )
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert not any(e["type"] == "sources" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_send_message_skips_context_when_no_chunks_found(client):
     session = (await client.post("/chat/sessions", json={})).json()
 

@@ -4,7 +4,7 @@ export default function HealthStatus() {
   const state = useHealthPoll()
 
   if (state.phase === 'loading') {
-    return <p className="health-loading">Checking backend health…</p>
+    return <p className="health-loading">Vérification de l'état du serveur…</p>
   }
 
   const isOk = state.phase === 'ok'
@@ -13,15 +13,15 @@ export default function HealthStatus() {
     <div className={`health-card ${isOk ? 'health-ok' : 'health-error'}`}>
       <div className="health-indicator">
         <span className="health-dot" />
-        <strong>{isOk ? 'Status: ok' : 'Status: error'}</strong>
+        <strong>{isOk ? 'État : ok' : 'État : erreur'}</strong>
       </div>
       {isOk ? (
-        <p>Database: {state.data.database}</p>
+        <p>Base de données : {state.data.database}</p>
       ) : (
         <p>{state.message}</p>
       )}
       <p className="health-timestamp">
-        Last checked: {state.lastChecked.toLocaleTimeString()}
+        Dernière vérification : {state.lastChecked.toLocaleTimeString()}
       </p>
     </div>
   )

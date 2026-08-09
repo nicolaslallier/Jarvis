@@ -10,7 +10,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from app.config import get_settings
 from app.db import Base, engine
 from app.models import Appointment, FileChunk, Memory
-from app.routers import calendar, chat, files, health, ingest_status, items, tasks
+from app.routers import briefing, calendar, chat, files, health, ingest_status, items, memory, tasks
 from app.telemetry import setup_telemetry
 from app.ws_manager import manager as ws_manager
 
@@ -90,3 +90,5 @@ app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(files.router)
 app.include_router(ingest_status.router)
+app.include_router(memory.router)
+app.include_router(briefing.router)

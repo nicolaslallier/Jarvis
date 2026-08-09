@@ -3,6 +3,7 @@
 # batch/Dockerfile and via -e ../shared in requirements-dev.txt for local dev.
 apscheduler>=3.10,<4.0
 docker
+httpx
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-logging

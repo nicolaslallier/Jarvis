@@ -3,6 +3,7 @@ import logging
 from datetime import UTC, datetime
 from io import BytesIO
 
+import docx
 from botocore.exceptions import BotoCoreError, ClientError
 from jarvis_shared import storage
 from jarvis_shared.models import FileChunk, StoredFile
@@ -23,6 +24,8 @@ _TEXT_CONTENT_TYPES = {"application/json"}
 _TEXT_FILE_EXTENSIONS = (".txt", ".md")
 _PDF_CONTENT_TYPE = "application/pdf"
 _PDF_FILE_EXTENSION = ".pdf"
+_DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_DOCX_FILE_EXTENSION = ".docx"
 _IMAGE_CONTENT_TYPE_PREFIX = "image/"
 _IMAGE_FILE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
@@ -33,6 +36,12 @@ def is_pdf(filename: str, content_type: str | None) -> bool:
     return filename.lower().endswith(_PDF_FILE_EXTENSION)
 
 
+def is_docx(filename: str, content_type: str | None) -> bool:
+    if content_type:
+        return content_type == _DOCX_CONTENT_TYPE
+    return filename.lower().endswith(_DOCX_FILE_EXTENSION)
+
+
 def is_image(filename: str, content_type: str | None) -> bool:
     if content_type:
         return content_type.startswith(_IMAGE_CONTENT_TYPE_PREFIX)
@@ -40,11 +49,13 @@ def is_image(filename: str, content_type: str | None) -> bool:
 
 
 def is_supported_text(filename: str, content_type: str | None) -> bool:
-    """Plainly-text content and PDFs are extracted directly. Images are
-    handled separately via describe_image (there's no text to extract from
-    raw image bytes). Other binary formats (DOCX) are a deliberately
+    """Plainly-text content, PDFs, and DOCX files are extracted directly.
+    Images are handled separately via describe_image (there's no text to
+    extract from raw image bytes). Other binary formats are a deliberately
     deferred follow-up."""
     if is_pdf(filename, content_type):
+        return True
+    if is_docx(filename, content_type):
         return True
     if content_type:
         return content_type.startswith(_TEXT_CONTENT_TYPE_PREFIXES) or content_type in _TEXT_CONTENT_TYPES
@@ -52,12 +63,16 @@ def is_supported_text(filename: str, content_type: str | None) -> bool:
 
 
 def extract_text(filename: str, content_type: str | None, raw: bytes) -> str:
-    """Raises on a PDF pypdf can't parse at all; callers treat that as a
-    permanent, unretryable failure for the file (same as an unsupported
-    content-type) rather than looping forever on the next trigger."""
+    """Raises on a PDF pypdf can't parse at all, or a DOCX python-docx can't
+    open at all; callers treat that as a permanent, unretryable failure for
+    the file (same as an unsupported content-type) rather than looping
+    forever on the next trigger."""
     if is_pdf(filename, content_type):
         reader = PdfReader(BytesIO(raw))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
+    if is_docx(filename, content_type):
+        document = docx.Document(BytesIO(raw))
+        return "\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)
     return raw.decode("utf-8", errors="replace")
 
 

@@ -41,6 +41,35 @@ _INSERT_SQL = text(
     """
 )
 
+# Deliberately selects only these 4 columns, never `embedding` — listing
+# memories for the Memory page never needs to touch the vector column, so
+# this stays free of the pgvector codec requirement too (same reasoning as
+# the module docstring above, just extended from writes to reads).
+_LIST_SQL = text(
+    """
+    SELECT id, content, session_id, created_at
+    FROM memories
+    ORDER BY id DESC
+    LIMIT :limit
+    """
+)
+
+# Re-embedding on update is required, not optional: if the user edits a
+# fact's text, the OLD embedding no longer matches the NEW content, which
+# would silently corrupt future similarity retrieval (fetch_relevant_memories
+# above). RETURNING lets a single round-trip double as the "does this id
+# exist" check the router needs for its 404.
+_UPDATE_SQL = text(
+    """
+    UPDATE memories
+    SET content = :content, embedding = CAST(:embedding AS vector)
+    WHERE id = :id
+    RETURNING id, content, session_id, created_at
+    """
+)
+
+_DELETE_SQL = text("DELETE FROM memories WHERE id = :id")
+
 EXTRACTION_SYSTEM_PROMPT = (
     "You extract durable facts worth remembering long-term about the user "
     "from a single chat exchange (their message and the assistant's reply "
@@ -113,3 +142,31 @@ async def store_memories(
             {"content": fact, "embedding": format_vector_literal(embedding), "session_id": session_id},
         )
     await db.commit()
+
+
+async def list_memories(db: AsyncSession, limit: int = 200):
+    """Every stored fact, most-recent-first, for the Memory page. Returns
+    plain SQLAlchemy Row objects (id, content, session_id, created_at) —
+    never touches `embedding`, so this needs no pgvector codec."""
+    result = await db.execute(_LIST_SQL, {"limit": limit})
+    return result.all()
+
+
+async def update_memory_content(
+    db: AsyncSession, memory_id: int, content: str, embedding: list[float]
+):
+    """Overwrites a fact's text and re-embeds it in one statement. Returns
+    the updated row, or None if no memory with that id exists."""
+    result = await db.execute(
+        _UPDATE_SQL,
+        {"content": content, "embedding": format_vector_literal(embedding), "id": memory_id},
+    )
+    row = result.first()
+    await db.commit()
+    return row
+
+
+async def delete_memory(db: AsyncSession, memory_id: int) -> bool:
+    result = await db.execute(_DELETE_SQL, {"id": memory_id})
+    await db.commit()
+    return result.rowcount > 0
