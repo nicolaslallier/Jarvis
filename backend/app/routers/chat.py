@@ -647,7 +647,8 @@ async def _stream_send_message(
             async for sse_event in _consume(_stream_attempt(settings, messages, None)):
                 yield sse_event
     except LMStudioStreamError as exc:
-        yield _sse({"type": "error", "detail": str(exc)})
+        logger.exception("LM Studio streaming failed", exc_info=exc)
+        yield _sse({"type": "error", "detail": "An internal error occurred while streaming the response."})
         return
 
     if not isinstance(final_content, str):
