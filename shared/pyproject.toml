@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jarvis-shared"
+version = "0.1.0"
+description = "Shared config/db/storage/models used by Jarvis's backend, batch, and ingest containers"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-settings",
+    "sqlalchemy>=2.0",
+    "asyncpg",
+    "greenlet",
+    "boto3",
+    "pgvector",
+    "alembic",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["jarvis_shared"]

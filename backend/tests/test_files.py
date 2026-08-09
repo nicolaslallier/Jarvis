@@ -46,7 +46,7 @@ class _FakeBody:
 @pytest.mark.asyncio
 async def test_upload_and_list_files(client):
     fake_client = _FakeS3Client()
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         response = await client.post(
             "/files", files={"file": ("hello.txt", b"hello world", "text/plain")}
         )
@@ -65,7 +65,7 @@ async def test_upload_and_list_files(client):
 @pytest.mark.asyncio
 async def test_download_file(client):
     fake_client = _FakeS3Client()
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         upload_response = await client.post(
             "/files", files={"file": ("hello.txt", b"hello world", "text/plain")}
         )
@@ -89,7 +89,7 @@ async def test_download_file_not_found(client):
 @pytest.mark.asyncio
 async def test_delete_file(client):
     fake_client = _FakeS3Client()
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         upload_response = await client.post(
             "/files", files={"file": ("hello.txt", b"hello world", "text/plain")}
         )
@@ -112,7 +112,7 @@ async def test_delete_file_not_found(client):
 @pytest.mark.asyncio
 async def test_upload_file_minio_unreachable(client):
     fake_client = _FakeS3Client(error=ClientError({"Error": {"Code": "500", "Message": "boom"}}, "PutObject"))
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         response = await client.post(
             "/files", files={"file": ("hello.txt", b"hello world", "text/plain")}
         )
@@ -156,7 +156,7 @@ async def test_upload_and_list_file_in_folder(client):
     folder_response = await client.post("/folders", json={"name": "Documents"})
     folder_id = folder_response.json()["id"]
 
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         upload_response = await client.post(
             "/files",
             data={"folder_id": str(folder_id)},
@@ -194,7 +194,7 @@ async def test_delete_folder_removes_nested_files_and_subfolders(client):
     )
     child_id = child_response.json()["id"]
 
-    with patch("app.routers.files.boto3.client", return_value=fake_client):
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
         await client.post(
             "/files",
             data={"folder_id": str(parent_id)},

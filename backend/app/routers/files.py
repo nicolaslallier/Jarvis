@@ -1,14 +1,14 @@
 import asyncio
 import uuid
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from jarvis_shared import storage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.db import get_db
 from app.models import Folder, StoredFile
 from app.schemas import FileRead, FolderCreate, FolderRead
@@ -37,40 +37,6 @@ async def _folder_subtree_ids(db: AsyncSession, root_id: int) -> list[int]:
     return ids
 
 
-def _s3_client(settings: Settings):
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.minio_endpoint,
-        aws_access_key_id=settings.minio_access_key,
-        aws_secret_access_key=settings.minio_secret_key,
-    )
-
-
-def _put_object(settings: Settings, key: str, body: bytes, content_type: str | None) -> None:
-    client = _s3_client(settings)
-    try:
-        client.head_bucket(Bucket=settings.minio_bucket)
-    except ClientError:
-        client.create_bucket(Bucket=settings.minio_bucket)
-    client.put_object(
-        Bucket=settings.minio_bucket,
-        Key=key,
-        Body=body,
-        ContentType=content_type or "application/octet-stream",
-    )
-
-
-def _get_object(settings: Settings, key: str) -> bytes:
-    client = _s3_client(settings)
-    obj = client.get_object(Bucket=settings.minio_bucket, Key=key)
-    return obj["Body"].read()
-
-
-def _delete_object(settings: Settings, key: str) -> None:
-    client = _s3_client(settings)
-    client.delete_object(Bucket=settings.minio_bucket, Key=key)
-
-
 @router.post("/files", response_model=FileRead)
 async def upload_file(
     file: UploadFile,
@@ -86,7 +52,7 @@ async def upload_file(
     object_key = f"{uuid.uuid4()}/{file.filename}"
 
     try:
-        await asyncio.to_thread(_put_object, settings, object_key, body, file.content_type)
+        await asyncio.to_thread(storage.put_object, settings, object_key, body, file.content_type)
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=502, detail=f"Could not reach MinIO at {settings.minio_endpoint}: {exc}"
@@ -148,7 +114,7 @@ async def delete_folder(folder_id: int, db: AsyncSession = Depends(get_db)) -> N
 
     for db_file in files_to_remove:
         try:
-            await asyncio.to_thread(_delete_object, settings, db_file.object_key)
+            await asyncio.to_thread(storage.delete_object, settings, db_file.object_key)
         except (BotoCoreError, ClientError) as exc:
             raise HTTPException(
                 status_code=502,
@@ -175,7 +141,7 @@ async def download_file(file_id: int, db: AsyncSession = Depends(get_db)) -> Res
 
     settings = get_settings()
     try:
-        data = await asyncio.to_thread(_get_object, settings, db_file.object_key)
+        data = await asyncio.to_thread(storage.get_object, settings, db_file.object_key)
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=502, detail=f"Could not reach MinIO at {settings.minio_endpoint}: {exc}"
@@ -196,7 +162,7 @@ async def delete_file(file_id: int, db: AsyncSession = Depends(get_db)) -> None:
 
     settings = get_settings()
     try:
-        await asyncio.to_thread(_delete_object, settings, db_file.object_key)
+        await asyncio.to_thread(storage.delete_object, settings, db_file.object_key)
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(
             status_code=502, detail=f"Could not reach MinIO at {settings.minio_endpoint}: {exc}"

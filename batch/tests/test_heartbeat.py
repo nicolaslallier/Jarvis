@@ -28,7 +28,7 @@ class _FakeS3Client:
 async def test_heartbeat_ok():
     with (
         patch("app.jobs.heartbeat.check_connection", return_value=None),
-        patch("app.storage.boto3.client", return_value=_FakeS3Client(["a", "b", "c"])),
+        patch("jarvis_shared.storage.boto3.client", return_value=_FakeS3Client(["a", "b", "c"])),
     ):
         await heartbeat.run()
 
@@ -57,7 +57,7 @@ async def test_heartbeat_minio_failure():
 
     with (
         patch("app.jobs.heartbeat.check_connection", return_value=None),
-        patch("app.storage.boto3.client", return_value=_BrokenS3Client()),
+        patch("jarvis_shared.storage.boto3.client", return_value=_BrokenS3Client()),
     ):
         await heartbeat.run()
 

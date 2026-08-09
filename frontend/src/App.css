@@ -264,6 +264,20 @@
   color: var(--text);
 }
 
+.file-ingest-badge {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.file-ingest-badge.is-indexed {
+  color: var(--text-h);
+  border-color: var(--text-h);
+}
+
 .folder-open {
   font: inherit;
   font-weight: 600;

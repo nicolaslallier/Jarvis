@@ -1,19 +1,14 @@
 from collections.abc import AsyncGenerator
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from jarvis_shared.db import Base, check_connection as _check_connection, make_engine, make_session_factory
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(settings.sqlalchemy_url)
-async_session = async_sessionmaker(engine, expire_on_commit=False)
-
-
-class Base(DeclarativeBase):
-    pass
+engine = make_engine(settings.sqlalchemy_url)
+async_session = make_session_factory(engine)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -22,5 +17,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def check_connection() -> None:
-    async with engine.connect() as conn:
-        await conn.execute(text("SELECT 1"))
+    await _check_connection(engine)
+
+
+__all__ = ["Base", "engine", "async_session", "get_db", "check_connection"]

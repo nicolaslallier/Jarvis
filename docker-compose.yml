@@ -1,6 +1,8 @@
 services:
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     env_file: .env
     environment:
       DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
@@ -45,7 +47,9 @@ services:
       - infra-net
 
   batch:
-    build: ./batch
+    build:
+      context: .
+      dockerfile: batch/Dockerfile
     env_file: .env
     environment:
       DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
@@ -57,6 +61,15 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-jarvis}
       BATCH_JOB_INTERVAL_MINUTES: ${BATCH_JOB_INTERVAL_MINUTES:-15}
+      INGEST_CONTAINER_NAME: ${INGEST_CONTAINER_NAME:-jarvis-ingest}
+    # Grants batch root-equivalent access to the Docker host (start/stop/
+    # inspect ANY container, create new ones with arbitrary mounts) so its
+    # ingest_trigger job can power the `ingest` container on and off — see
+    # CLAUDE.md's "Ingestion" section for the full security tradeoff. `:ro`
+    # is best-effort hardening only; the daemon socket's own API doesn't
+    # respect filesystem read-only semantics for its write operations.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
@@ -69,12 +82,41 @@ services:
         aliases:
           - jarvis-batch
 
+  # Normally stopped ("Exited") — does one ingestion pass and exits.
+  # batch's ingest_trigger job starts it (via the Docker socket) whenever
+  # there are unprocessed files; `restart: "no"` means it goes back to
+  # "Exited" on its own once that pass finishes, rather than looping.
+  ingest:
+    build:
+      context: .
+      dockerfile: ingest/Dockerfile
+    container_name: jarvis-ingest
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
+      APP_ENV: ${APP_ENV:-development}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}
+      OTEL_SERVICE_NAME: ${INGEST_OTEL_SERVICE_NAME:-jarvis-ingest}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-jarvis}
+      EMBEDDING_LMSTUDIO_BASE_URL: ${EMBEDDING_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234}
+      EMBEDDING_LMSTUDIO_MODEL: ${EMBEDDING_LMSTUDIO_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      INGEST_CHUNK_SIZE_CHARS: ${INGEST_CHUNK_SIZE_CHARS:-1000}
+      INGEST_CHUNK_OVERLAP_CHARS: ${INGEST_CHUNK_OVERLAP_CHARS:-150}
+    restart: "no"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - infra-net
+
 # `postgres` lives in the separate Infra repo's own Compose project, so it
 # can't be referenced via `depends_on` here. Make sure the Infra stack
 # (docker compose up in /Users/nicolaslallier/Claude/Infra) is already
-# running before starting the `api`/`batch` services — both connect to
-# Infra's Postgres and MinIO over infra-net. `frontend` is on infra-net so
-# the Infra repo's shared NGINX can reverse-proxy it at
+# running before starting the `api`/`batch`/`ingest` services — all three
+# connect to Infra's Postgres and MinIO over infra-net. `frontend` is on
+# infra-net so the Infra repo's shared NGINX can reverse-proxy it at
 # jarvis.infra.famillelallier.net (see nginx/conf.d/jarvis.conf there).
 networks:
   infra-net:

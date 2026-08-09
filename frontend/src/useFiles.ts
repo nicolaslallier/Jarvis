@@ -7,6 +7,7 @@ export type StoredFile = {
   size: number
   folder_id: number | null
   created_at: string
+  ingested_at: string | null
 }
 
 export type Folder = {
