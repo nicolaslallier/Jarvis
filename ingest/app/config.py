@@ -21,7 +21,7 @@ class Settings(SharedSettings):
     # input. The description text is what actually gets chunked/embedded,
     # so image search works off of described content rather than pixels.
     vision_lmstudio_base_url: str = "http://host.docker.internal:1234"
-    vision_lmstudio_model: str = "qwen2-vl-7b-instruct"
+    vision_lmstudio_model: str = "qwen/qwen3.6-35b-a3b"
     vision_description_prompt: str = (
         "Describe this image in detail for a search index: visible text, "
         "objects, people, setting, and any other identifying context."
