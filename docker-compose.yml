@@ -44,10 +44,36 @@ services:
     networks:
       - infra-net
 
+  batch:
+    build: ./batch
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
+      APP_ENV: ${APP_ENV:-development}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}
+      OTEL_SERVICE_NAME: ${BATCH_OTEL_SERVICE_NAME:-jarvis-batch}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-jarvis}
+      BATCH_JOB_INTERVAL_MINUTES: ${BATCH_JOB_INTERVAL_MINUTES:-15}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      infra-net:
+        aliases:
+          - jarvis-batch
+
 # `postgres` lives in the separate Infra repo's own Compose project, so it
 # can't be referenced via `depends_on` here. Make sure the Infra stack
 # (docker compose up in /Users/nicolaslallier/Claude/Infra) is already
-# running before starting the `api` service. `frontend` is on infra-net so
+# running before starting the `api`/`batch` services — both connect to
+# Infra's Postgres and MinIO over infra-net. `frontend` is on infra-net so
 # the Infra repo's shared NGINX can reverse-proxy it at
 # jarvis.infra.famillelallier.net (see nginx/conf.d/jarvis.conf there).
 networks:

@@ -1,0 +1,9 @@
+apscheduler>=3.10,<4.0
+sqlalchemy>=2.0
+asyncpg
+greenlet
+pydantic-settings
+boto3
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-logging
