@@ -1,10 +1,12 @@
 import asyncio
 import logging
 from datetime import UTC, datetime
+from io import BytesIO
 
 from botocore.exceptions import BotoCoreError, ClientError
 from jarvis_shared import storage
 from jarvis_shared.models import FileChunk, StoredFile
+from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,14 +19,34 @@ logger = logging.getLogger(__name__)
 _TEXT_CONTENT_TYPE_PREFIXES = ("text/",)
 _TEXT_CONTENT_TYPES = {"application/json"}
 _TEXT_FILE_EXTENSIONS = (".txt", ".md")
+_PDF_CONTENT_TYPE = "application/pdf"
+_PDF_FILE_EXTENSION = ".pdf"
+
+
+def is_pdf(filename: str, content_type: str | None) -> bool:
+    if content_type:
+        return content_type == _PDF_CONTENT_TYPE
+    return filename.lower().endswith(_PDF_FILE_EXTENSION)
 
 
 def is_supported_text(filename: str, content_type: str | None) -> bool:
-    """Only plainly-text content is extracted in this first pass. Binary
-    formats (PDF, DOCX, images) are a deliberately deferred follow-up."""
+    """Plainly-text content and PDFs are extracted. Other binary formats
+    (DOCX, images) are a deliberately deferred follow-up."""
+    if is_pdf(filename, content_type):
+        return True
     if content_type:
         return content_type.startswith(_TEXT_CONTENT_TYPE_PREFIXES) or content_type in _TEXT_CONTENT_TYPES
     return filename.lower().endswith(_TEXT_FILE_EXTENSIONS)
+
+
+def extract_text(filename: str, content_type: str | None, raw: bytes) -> str:
+    """Raises on a PDF pypdf can't parse at all; callers treat that as a
+    permanent, unretryable failure for the file (same as an unsupported
+    content-type) rather than looping forever on the next trigger."""
+    if is_pdf(filename, content_type):
+        reader = PdfReader(BytesIO(raw))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    return raw.decode("utf-8", errors="replace")
 
 
 async def fetch_pending_files(session: AsyncSession) -> list[StoredFile]:
@@ -63,7 +85,14 @@ async def process_file(session: AsyncSession, settings: Settings, file: StoredFi
         logger.exception("ingest: failed to fetch %s from MinIO", file.object_key)
         return False
 
-    text = raw.decode("utf-8", errors="replace")
+    try:
+        text = extract_text(file.filename, file.content_type, raw)
+    except Exception:
+        logger.exception("ingest: failed to extract text from file_id=%s filename=%s", file.id, file.filename)
+        file.ingested_at = datetime.now(UTC)
+        await session.commit()
+        return True
+
     chunks = chunk_text(
         text, chunk_size_chars=settings.chunk_size_chars, chunk_overlap_chars=settings.chunk_overlap_chars
     )
