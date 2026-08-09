@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -5,7 +6,7 @@ import pytest
 
 from app.memory import RetrievedMemory
 from app.rag import RetrievedChunk
-from app.routers.chat import SECRETARY_SYSTEM_PROMPT
+from app.routers.chat import CALENDAR_TOOLS, SECRETARY_SYSTEM_PROMPT
 
 
 class _RoutingFakeLMStudioClient:
@@ -71,6 +72,42 @@ def _ok_response(content: str) -> httpx.Response:
         json={"choices": [{"message": {"role": "assistant", "content": content}}]},
         request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
     )
+
+
+def _tool_call_response(tool_calls: list[dict]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}
+            ]
+        },
+        request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
+    )
+
+
+class _SequentialFakeLMStudioClient:
+    """Like _RoutingFakeLMStudioClient, but supports multiple queued
+    responses per URL — needed for the tool-calling round trip, which calls
+    /v1/chat/completions twice (once to get the tool_calls, once more with
+    the tool result to get the final natural-language reply)."""
+
+    def __init__(self, responses: dict[str, list[httpx.Response]]):
+        self._responses = {url: list(r) for url, r in responses.items()}
+        self.calls: list[tuple[str, dict]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def post(self, url, **kwargs):
+        self.calls.append((url, kwargs.get("json")))
+        queue = self._responses.get(url)
+        if not queue:
+            raise AssertionError(f"no queued response for {url}")
+        return queue.pop(0)
 
 
 @pytest.mark.asyncio
@@ -476,3 +513,132 @@ async def test_send_message_continues_when_memory_extraction_fails(client):
 
     assert response.status_code == 200
     assert response.json()["assistant_message"]["content"] == "hi there"
+
+
+@pytest.mark.asyncio
+async def test_send_message_first_completion_call_offers_calendar_tools(client):
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    responses = {
+        "http://lmstudio.test/v1/chat/completions": [_ok_response("hi there")],
+    }
+    fake_client = _SequentialFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    _, completion_json = next(
+        c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")
+    )
+    assert completion_json["tools"] == CALENDAR_TOOLS
+    assert completion_json["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_send_message_executes_calendar_tool_call(client):
+    """Jarvis actually manages the calendar: a model reply containing a
+    create_appointment tool call results in a real appointment row, and a
+    follow-up completion call (without tools, carrying the tool result)
+    produces the final user-visible reply."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "create_appointment",
+                "arguments": json.dumps(
+                    {
+                        "title": "Dentist",
+                        "start_time": "2026-09-01T15:00:00+00:00",
+                        "end_time": "2026-09-01T15:30:00+00:00",
+                    }
+                ),
+            },
+        }
+    ]
+    responses = {
+        "http://lmstudio.test/v1/chat/completions": [
+            _tool_call_response(tool_calls),
+            _ok_response("Booked your dentist appointment for Sep 1 at 3pm."),
+        ],
+    }
+    fake_client = _SequentialFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "book me a dentist appointment sep 1 3-3:30pm"},
+        )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["assistant_message"]["content"]
+        == "Booked your dentist appointment for Sep 1 at 3pm."
+    )
+
+    list_response = await client.get("/calendar/appointments")
+    titles = [a["title"] for a in list_response.json()]
+    assert "Dentist" in titles
+
+    # First two completions calls are the tool-call round trip; a possible
+    # third is the best-effort memory-extraction call that runs after
+    # (unrelated to tool calling, and this fake client has no response
+    # queued for it, so it fails harmlessly — see other memory tests).
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    assert completion_calls[0][1]["tools"] == CALENDAR_TOOLS
+    followup_payload = completion_calls[1][1]
+    assert "tools" not in followup_payload
+    tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
+    result = json.loads(tool_message["content"])
+    assert result["appointment"]["title"] == "Dentist"
+
+
+@pytest.mark.asyncio
+async def test_send_message_falls_back_when_tools_rejected(client):
+    """Not every LM Studio model/version supports tool calling — if the
+    first (tools-enabled) completion call fails outright, retry once
+    without tools rather than failing the whole message send."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    rejected = httpx.Response(
+        400,
+        text="tools not supported by this model",
+        request=httpx.Request("POST", "http://lmstudio.test/v1/chat/completions"),
+    )
+    responses = {
+        "http://lmstudio.test/v1/chat/completions": [rejected, _ok_response("plain reply")],
+    }
+    fake_client = _SequentialFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == "plain reply"
+
+    # First two completions calls are the tools-rejected retry round trip; a
+    # possible third is the best-effort memory-extraction call afterward.
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    assert completion_calls[0][1]["tools"] == CALENDAR_TOOLS
+    assert "tools" not in completion_calls[1][1]

@@ -5,6 +5,7 @@ import TaskCountWidget from './TaskCountWidget'
 import TasksPage from './TasksPage'
 import ChatPage from './ChatPage'
 import FilesPage from './FilesPage'
+import CalendarPage from './CalendarPage'
 import './App.css'
 
 function App() {
@@ -16,6 +17,9 @@ function App() {
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Tasks
+        </NavLink>
+        <NavLink to="/calendar" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
+          Calendar
         </NavLink>
         <NavLink to="/chat" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Chat
@@ -37,6 +41,7 @@ function App() {
           }
         />
         <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/files" element={<FilesPage />} />
       </Routes>

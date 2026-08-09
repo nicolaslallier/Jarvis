@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import calendar_service
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.memory import (
@@ -16,7 +18,7 @@ from app.memory import (
     parse_extracted_facts,
     store_memories,
 )
-from app.models import ChatMessageRecord, ChatSession
+from app.models import Appointment, ChatMessageRecord, ChatSession
 from app.rag import fetch_relevant_chunks, format_context
 from app.schemas import (
     ChatMessageRead,
@@ -50,6 +52,87 @@ SECRETARY_SYSTEM_PROMPT = (
     "documents are provided below as context, weave them in naturally "
     "without mentioning that they were 'retrieved' or 'remembered'."
 )
+
+# OpenAI-compatible tool schema letting the model manage the user's calendar
+# directly (create/reschedule/cancel/list appointments) instead of only
+# being able to discuss the upcoming-appointments context injected below.
+# Not every LM Studio model/version supports tool calling — see
+# _call_lmstudio's fallback, which retries without this if the model
+# rejects it, so calendar tools are a capability boost, never a chat
+# dependency.
+CALENDAR_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_appointments",
+            "description": "List the user's calendar appointments, optionally filtered to a date range.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime. Only appointments ending on/after this are included.",
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime. Only appointments starting on/before this are included.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_appointment",
+            "description": "Create a new appointment on the user's calendar.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {"type": "string", "description": "ISO 8601 datetime"},
+                    "end_time": {"type": "string", "description": "ISO 8601 datetime"},
+                    "description": {"type": "string"},
+                    "location": {"type": "string"},
+                    "all_day": {"type": "boolean"},
+                },
+                "required": ["title", "start_time", "end_time"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_appointment",
+            "description": "Update an existing appointment. Only the fields provided are changed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "start_time": {"type": "string", "description": "ISO 8601 datetime"},
+                    "end_time": {"type": "string", "description": "ISO 8601 datetime"},
+                    "description": {"type": "string"},
+                    "location": {"type": "string"},
+                    "all_day": {"type": "boolean"},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_appointment",
+            "description": "Delete/cancel an appointment.",
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}},
+                "required": ["id"],
+            },
+        },
+    },
+]
 
 
 async def _embed_text(settings: Settings, query: str) -> list[float] | None:
@@ -110,6 +193,109 @@ async def _build_memory_context(
     except Exception:
         logger.warning("Memory context retrieval failed", exc_info=True)
         return None
+
+
+async def _build_calendar_context(db: AsyncSession, settings: Settings) -> str | None:
+    """Best-effort: surfaces the user's upcoming appointments so the model
+    can answer day/week-planning questions without needing a tool call.
+    Unlike RAG/memory context, this needs no embedding — it's a plain
+    date-range query — so it runs unconditionally rather than depending on
+    _embed_text having succeeded.
+    """
+    try:
+        appointments = await calendar_service.fetch_upcoming(db, settings.calendar_upcoming_days)
+        if not appointments:
+            return None
+        return calendar_service.format_upcoming_context(appointments)
+    except Exception:
+        logger.warning("Calendar context retrieval failed", exc_info=True)
+        return None
+
+
+def _parse_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _appointment_to_dict(appointment: Appointment) -> dict:
+    return {
+        "id": appointment.id,
+        "title": appointment.title,
+        "description": appointment.description,
+        "location": appointment.location,
+        "start_time": appointment.start_time.isoformat(),
+        "end_time": appointment.end_time.isoformat(),
+        "all_day": appointment.all_day,
+    }
+
+
+async def _execute_calendar_tool_call(db: AsyncSession, name: str, arguments: dict) -> dict:
+    """Runs one calendar tool call the model requested and returns a
+    JSON-serializable result to feed back to it as a `role: tool` message.
+    Errors (bad arguments, appointment not found) are returned as an error
+    payload rather than raised, so one bad tool call doesn't abort the
+    whole chat send — the model sees the error and can retry or explain it.
+    """
+    try:
+        if name == "list_appointments":
+            start = _parse_datetime(arguments["start"]) if arguments.get("start") else None
+            end = _parse_datetime(arguments["end"]) if arguments.get("end") else None
+            appointments = await calendar_service.list_appointments(db, start=start, end=end)
+            return {"appointments": [_appointment_to_dict(a) for a in appointments]}
+        if name == "create_appointment":
+            appointment = await calendar_service.create_appointment(
+                db,
+                title=arguments["title"],
+                start_time=_parse_datetime(arguments["start_time"]),
+                end_time=_parse_datetime(arguments["end_time"]),
+                description=arguments.get("description"),
+                location=arguments.get("location"),
+                all_day=arguments.get("all_day", False),
+            )
+            return {"appointment": _appointment_to_dict(appointment)}
+        if name == "update_appointment":
+            fields = {k: v for k, v in arguments.items() if k != "id"}
+            if "start_time" in fields:
+                fields["start_time"] = _parse_datetime(fields["start_time"])
+            if "end_time" in fields:
+                fields["end_time"] = _parse_datetime(fields["end_time"])
+            appointment = await calendar_service.update_appointment(db, arguments["id"], **fields)
+            if appointment is None:
+                return {"error": f"no appointment with id {arguments['id']}"}
+            return {"appointment": _appointment_to_dict(appointment)}
+        if name == "delete_appointment":
+            deleted = await calendar_service.delete_appointment(db, arguments["id"])
+            if not deleted:
+                return {"error": f"no appointment with id {arguments['id']}"}
+            return {"deleted": True}
+        return {"error": f"unknown tool {name}"}
+    except Exception as exc:
+        logger.warning("Calendar tool call %s failed", name, exc_info=True)
+        return {"error": str(exc)}
+
+
+def _extract_message(data: dict) -> dict:
+    try:
+        return data["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
+
+
+async def _call_lmstudio(
+    settings: Settings, messages: list[dict], tools: list[dict] | None
+) -> httpx.Response:
+    payload: dict = {"model": settings.lmstudio_model, "messages": messages}
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    try:
+        async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
+            return await client.post(
+                f"{settings.lmstudio_base_url}/v1/chat/completions", json=payload
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not reach LM Studio at {settings.lmstudio_base_url}: {exc}"
+        ) from exc
 
 
 async def _record_memories(
@@ -229,35 +415,62 @@ async def send_message(
     embedding = await _embed_text(settings, payload.content)
     memory_context = await _build_memory_context(db, settings, embedding)
     rag_context = await _build_rag_context(db, settings, embedding)
+    calendar_context = await _build_calendar_context(db, settings)
 
     context_messages = [{"role": "system", "content": SECRETARY_SYSTEM_PROMPT}]
     if memory_context is not None:
         context_messages.append({"role": "system", "content": memory_context})
     if rag_context is not None:
         context_messages.append({"role": "system", "content": rag_context})
+    if calendar_context is not None:
+        context_messages.append({"role": "system", "content": calendar_context})
     messages_for_model = context_messages + history
 
-    try:
-        async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{settings.lmstudio_base_url}/v1/chat/completions",
-                json={"model": settings.lmstudio_model, "messages": messages_for_model},
-            )
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Could not reach LM Studio at {settings.lmstudio_base_url}: {exc}"
-        ) from exc
-
+    response = await _call_lmstudio(settings, messages_for_model, tools=CALENDAR_TOOLS)
+    if response.status_code != 200:
+        # Some LM Studio/model combinations reject the `tools` field
+        # outright — retry once without it so chat still works. Tool
+        # calling is a capability boost, never a reason a message fails.
+        response = await _call_lmstudio(settings, messages_for_model, tools=None)
     if response.status_code != 200:
         raise HTTPException(
             status_code=502, detail=f"LM Studio returned {response.status_code}: {response.text}"
         )
 
-    data = response.json()
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
+    message = _extract_message(response.json())
+
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        assistant_tool_message = {
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": tool_calls,
+        }
+        tool_result_messages = []
+        for call in tool_calls:
+            function = call.get("function", {})
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            result = await _execute_calendar_tool_call(db, function.get("name", ""), arguments)
+            tool_result_messages.append(
+                {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
+            )
+
+        followup_response = await _call_lmstudio(
+            settings, messages_for_model + [assistant_tool_message] + tool_result_messages, tools=None
+        )
+        if followup_response.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"LM Studio returned {followup_response.status_code}: {followup_response.text}",
+            )
+        message = _extract_message(followup_response.json())
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio")
 
     assistant_message = ChatMessageRecord(session_id=session.id, role="assistant", content=content)
     db.add(assistant_message)
