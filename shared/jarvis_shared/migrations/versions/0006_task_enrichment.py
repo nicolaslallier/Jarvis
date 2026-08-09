@@ -43,11 +43,19 @@ def upgrade() -> None:
     )
 
     # Backfill status/completed_at from the old `done` boolean, and due_at
-    # from the old `due_date` (midnight on that date), before dropping them.
+    # from the old `due_date`, before dropping them. Anchor the old
+    # date-only value at noon UTC rather than midnight — midnight UTC
+    # renders as the *previous* evening in every negative-UTC-offset
+    # timezone, silently shifting the due date back a day for most of North
+    # America. Noon UTC stays on the correct calendar day for every real
+    # timezone (UTC-11 through UTC+14).
     op.execute("UPDATE tasks SET status = CASE WHEN done THEN 'done' ELSE 'todo' END")
     op.execute("UPDATE tasks SET priority = 'normal'")
     op.execute("UPDATE tasks SET completed_at = created_at WHERE done")
-    op.execute("UPDATE tasks SET due_at = due_date::timestamptz WHERE due_date IS NOT NULL")
+    op.execute(
+        "UPDATE tasks SET due_at = (due_date::timestamp + interval '12 hours') AT TIME ZONE 'UTC' "
+        "WHERE due_date IS NOT NULL"
+    )
 
     op.alter_column("tasks", "status", nullable=False, server_default="todo")
     op.alter_column("tasks", "priority", nullable=False, server_default="normal")
