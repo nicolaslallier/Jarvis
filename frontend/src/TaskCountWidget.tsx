@@ -33,15 +33,15 @@ export default function TaskCountWidget() {
 
   return (
     <section className="task-count">
-      {state.phase === 'loading' && <span className="task-count-loading">Loading…</span>}
+      {state.phase === 'loading' && <span className="task-count-loading">Chargement…</span>}
       {state.phase === 'ok' && (
         <>
-          <span className="task-count-total">{state.data.total} tasks</span>
+          <span className="task-count-total">{state.data.total} tâches</span>
           {state.data.active > 0 && (
-            <span className="task-count-active">{state.data.active} active</span>
+            <span className="task-count-active">{state.data.active} actives</span>
           )}
           {state.data.done > 0 && (
-            <span className="task-count-done">{state.data.done} done</span>
+            <span className="task-count-done">{state.data.done} terminées</span>
           )}
         </>
       )}

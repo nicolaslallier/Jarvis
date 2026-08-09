@@ -5,7 +5,8 @@
   text-align: center;
 }
 
-.app:has(.calendar) {
+.app:has(.calendar),
+.app:has(.tasks) {
   max-width: 760px;
 }
 
@@ -198,6 +199,131 @@
 .task-edit-actions {
   display: flex;
   gap: 8px;
+}
+
+.task-edit-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-edit-row input,
+.task-edit-row select,
+.tasks-form select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  flex: 1;
+  min-width: 140px;
+}
+
+.tasks-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tasks-filters input,
+.tasks-filters select {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.tasks-filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.tasks-section {
+  margin-bottom: 24px;
+}
+
+.tasks-section-title {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.tasks-section-overdue {
+  color: #e74c3c;
+}
+
+.tasks-section-toggle {
+  font: inherit;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: none;
+  border: none;
+  padding: 0 0 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.task-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.task-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.task-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.task-priority-badge.priority-high {
+  color: #e74c3c;
+  border-color: #e74c3c;
+}
+
+.task-priority-badge.priority-low {
+  color: var(--text);
+}
+
+.task-item.priority-high {
+  border-left: 3px solid #e74c3c;
+}
+
+.task-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-due-overdue {
+  color: #e74c3c;
+  font-weight: 600;
+}
+
+.tasks-row-error {
+  color: #e74c3c;
+  font-size: 13px;
+  margin-top: 8px;
 }
 
 .files {

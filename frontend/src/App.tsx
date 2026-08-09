@@ -16,7 +16,7 @@ function App() {
           Home
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
-          Tasks
+          Tâches
         </NavLink>
         <NavLink to="/calendar" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Calendar

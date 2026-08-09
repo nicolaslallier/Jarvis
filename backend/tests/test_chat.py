@@ -7,7 +7,7 @@ import pytest
 
 from app.memory import RetrievedMemory
 from app.rag import RetrievedChunk
-from app.routers.chat import CALENDAR_TOOLS, SECRETARY_SYSTEM_PROMPT
+from app.routers.chat import SECRETARY_SYSTEM_PROMPT, TOOLS
 
 
 class _RoutingFakeLMStudioClient:
@@ -572,7 +572,7 @@ async def test_send_message_first_completion_call_offers_calendar_tools(client):
     _, completion_json = next(
         c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")
     )
-    assert completion_json["tools"] == CALENDAR_TOOLS
+    assert completion_json["tools"] == TOOLS
     assert completion_json["tool_choice"] == "auto"
 
 
@@ -634,12 +634,62 @@ async def test_send_message_executes_calendar_tool_call(client):
     # queued for it, so it fails harmlessly — see other memory tests).
     completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
     assert len(completion_calls) >= 2
-    assert completion_calls[0][1]["tools"] == CALENDAR_TOOLS
+    assert completion_calls[0][1]["tools"] == TOOLS
     followup_payload = completion_calls[1][1]
     assert "tools" not in followup_payload
     tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
     result = json.loads(tool_message["content"])
     assert result["appointment"]["title"] == "Dentist"
+
+
+@pytest.mark.asyncio
+async def test_send_message_executes_task_tool_call(client):
+    """Same round trip as the calendar tool test above, but for the task
+    tools: a create_task tool call results in a real task row."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "create_task",
+                "arguments": json.dumps({"title": "Buy corn", "priority": "high"}),
+            },
+        }
+    ]
+    responses = {
+        "http://lmstudio.test/v1/chat/completions": [
+            _tool_call_response(tool_calls),
+            _ok_response("Added \"Buy corn\" to your tasks."),
+        ],
+    }
+    fake_client = _SequentialFakeLMStudioClient(responses)
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "remind me to buy corn"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_message"]["content"] == 'Added "Buy corn" to your tasks.'
+
+    list_response = await client.get("/tasks")
+    titles = [t["title"] for t in list_response.json()]
+    assert "Buy corn" in titles
+
+    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    assert len(completion_calls) >= 2
+    followup_payload = completion_calls[1][1]
+    tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
+    result = json.loads(tool_message["content"])
+    assert result["task"]["title"] == "Buy corn"
+    assert result["task"]["priority"] == "high"
 
 
 @pytest.mark.asyncio
@@ -675,5 +725,5 @@ async def test_send_message_falls_back_when_tools_rejected(client):
     # possible third is the best-effort memory-extraction call afterward.
     completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
     assert len(completion_calls) >= 2
-    assert completion_calls[0][1]["tools"] == CALENDAR_TOOLS
+    assert completion_calls[0][1]["tools"] == TOOLS
     assert "tools" not in completion_calls[1][1]
