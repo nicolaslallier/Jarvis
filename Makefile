@@ -59,21 +59,21 @@ health-batch: ## Curl the batch worker's internal health endpoint via docker exe
 		(echo "\n❌ batch health endpoint not reachable"; exit 1)
 
 migrate: ## Run Alembic migrations (needs DATABASE_URL reachable + pgvector prerequisite, see CLAUDE.md)
-	cd shared && pip install -q -e . && DATABASE_URL=$${DATABASE_URL:-postgres://jarvis:$${JARVIS_DB_PASSWORD}@127.0.0.1:5432/jarvis} python -m alembic upgrade head
+	cd shared && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -m pip install -q -e . && DATABASE_URL=$${DATABASE_URL:-postgres://jarvis:$${JARVIS_DB_PASSWORD}@127.0.0.1:5432/jarvis} .venv/bin/python -m alembic upgrade head
 
 test: test-shared test-backend test-batch test-ingest ## Alias for test-shared + test-backend + test-batch + test-ingest
 
 test-shared: ## Run the shared package's pytest suite (no live services needed)
-	cd shared && pip install -q -r requirements-dev.txt && pytest
+	cd shared && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -m pip install -q -r requirements-dev.txt && .venv/bin/python -m pytest
 
 test-backend: ## Run backend pytest suite (no live services needed — settings/db/minio are mocked)
-	cd backend && pip install -q -r requirements-dev.txt && pytest
+	cd backend && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -m pip install -q -r requirements-dev.txt && .venv/bin/python -m pytest
 
 test-batch: ## Run batch pytest suite (settings/db/minio/docker are mocked, no live services needed)
-	cd batch && pip install -q -r requirements-dev.txt && pytest
+	cd batch && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -m pip install -q -r requirements-dev.txt && .venv/bin/python -m pytest
 
 test-ingest: ## Run ingest pytest suite (settings/db/minio/LM Studio are mocked, no live services needed)
-	cd ingest && pip install -q -r requirements-dev.txt && pytest
+	cd ingest && (test -d .venv || python3 -m venv .venv) && .venv/bin/python -m pip install -q -r requirements-dev.txt && .venv/bin/python -m pytest
 
 install-frontend: ## npm install the frontend deps
 	cd frontend && npm install
