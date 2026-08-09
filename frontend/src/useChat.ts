@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export type ChatMessage = {
   id: number
@@ -25,7 +25,23 @@ type MessagesState =
   | { phase: 'sending' }
   | { phase: 'error'; message: string }
 
+// Server-sent events the streaming POST /chat/sessions/{id}/messages
+// endpoint emits, in the order they can arrive (see
+// backend/app/routers/chat.py's _stream_send_message).
+type ChatStreamEvent =
+  | { type: 'user_message'; message: ChatMessage }
+  | { type: 'session'; session: ChatSession }
+  | { type: 'delta'; content: string }
+  | { type: 'tool_call'; name: string }
+  | { type: 'done'; assistant_message: ChatMessage; session: ChatSession }
+  | { type: 'error'; detail: string }
+
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
+// Sentinel id for the assistant message being streamed in, before it has a
+// real database id — negative like the optimistic user-message id below so
+// neither can collide with a real (positive) message id.
+const STREAMING_ASSISTANT_ID = -1
 
 async function errorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => null)
@@ -42,11 +58,33 @@ function sortByMostRecentlyActive(sessions: ChatSession[]): ChatSession[] {
   )
 }
 
+async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ChatStreamEvent> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let separatorIndex: number
+    while ((separatorIndex = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, separatorIndex)
+      buffer = buffer.slice(separatorIndex + 2)
+      if (!block.startsWith('data:')) continue
+      yield JSON.parse(block.slice('data:'.length).trim()) as ChatStreamEvent
+    }
+  }
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState<SessionsState>({ phase: 'loading' })
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [state, setState] = useState<MessagesState>({ phase: 'idle' })
+  const [toolActivity, setToolActivity] = useState<string | null>(null)
+  const lastFailedMessage = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -82,6 +120,7 @@ export function useChat() {
   async function selectSession(id: number): Promise<void> {
     setActiveSessionId(id)
     setState({ phase: 'loading' })
+    setToolActivity(null)
 
     try {
       const res = await fetch(`${API_URL}/chat/sessions/${id}`)
@@ -182,6 +221,7 @@ export function useChat() {
     }
     setMessages((prev) => [...prev, optimisticUser])
     setState({ phase: 'sending' })
+    setToolActivity(null)
 
     try {
       const res = await fetch(`${API_URL}/chat/sessions/${sessionId}/messages`, {
@@ -190,38 +230,84 @@ export function useChat() {
         body: JSON.stringify({ content }),
       })
 
-      if (!res.ok) {
-        const message = await errorMessage(res)
+      if (!res.ok || !res.body) {
+        const message = res.ok ? 'Empty response body' : await errorMessage(res)
         // The user message may already be persisted server-side even though
-        // the LM Studio call failed — reload from the server so the UI
-        // reflects what's actually saved instead of a stale optimistic entry.
+        // the send failed — reload from the server so the UI reflects
+        // what's actually saved instead of a stale optimistic entry.
         await selectSession(sessionId)
+        lastFailedMessage.current = content
         setState({ phase: 'error', message })
         return
       }
 
-      const data: { session: ChatSession; user_message: ChatMessage; assistant_message: ChatMessage } =
-        await res.json()
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== optimisticUser.id),
-        data.user_message,
-        data.assistant_message,
-      ])
-      setSessions((prev) =>
-        prev.phase === 'ok'
-          ? {
-              phase: 'ok',
-              data: sortByMostRecentlyActive([
-                data.session,
-                ...prev.data.filter((s) => s.id !== data.session.id),
-              ]),
+      let streamedContent = ''
+      let sawAssistantPlaceholder = false
+      let streamError: string | null = null
+
+      for await (const event of readSseEvents(res.body)) {
+        if (event.type === 'user_message') {
+          setMessages((prev) => [...prev.filter((m) => m.id !== optimisticUser.id), event.message])
+        } else if (event.type === 'session') {
+          setSessions((prev) =>
+            prev.phase === 'ok'
+              ? {
+                  phase: 'ok',
+                  data: sortByMostRecentlyActive([
+                    event.session,
+                    ...prev.data.filter((s) => s.id !== event.session.id),
+                  ]),
+                }
+              : prev,
+          )
+        } else if (event.type === 'delta') {
+          streamedContent += event.content
+          setToolActivity(null)
+          if (!sawAssistantPlaceholder) {
+            sawAssistantPlaceholder = true
+            const placeholder: ChatMessage = {
+              id: STREAMING_ASSISTANT_ID,
+              role: 'assistant',
+              content: streamedContent,
+              created_at: new Date().toISOString(),
             }
-          : prev,
-      )
+            setMessages((prev) => [...prev, placeholder])
+          } else {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === STREAMING_ASSISTANT_ID ? { ...m, content: streamedContent } : m)),
+            )
+          }
+        } else if (event.type === 'tool_call') {
+          setToolActivity(event.name)
+        } else if (event.type === 'error') {
+          streamError = event.detail
+        } else if (event.type === 'done') {
+          setMessages((prev) => [
+            ...prev.filter((m) => m.id !== STREAMING_ASSISTANT_ID),
+            event.assistant_message,
+          ])
+          setToolActivity(null)
+        }
+      }
+
+      if (streamError) {
+        lastFailedMessage.current = content
+        setState({ phase: 'error', message: streamError })
+        return
+      }
+
+      lastFailedMessage.current = null
       setState({ phase: 'idle' })
     } catch (err) {
+      lastFailedMessage.current = content
       setState({ phase: 'error', message: networkErrorMessage(err) })
     }
+  }
+
+  async function retryLastMessage(): Promise<void> {
+    const content = lastFailedMessage.current
+    if (!content) return
+    await sendMessage(content)
   }
 
   return {
@@ -229,9 +315,12 @@ export function useChat() {
     activeSessionId,
     messages,
     state,
+    toolActivity,
+    canRetry: lastFailedMessage.current !== null,
     selectSession,
     createSession,
     deleteSession,
     sendMessage,
+    retryLastMessage,
   }
 }

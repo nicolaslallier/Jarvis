@@ -28,6 +28,19 @@ class Settings(SharedSettings):
     # per chat message.
     memory_top_k: int = 6
 
+    # IANA timezone name used to ground the model's "current date/time"
+    # context (see app/routers/chat.py's _build_datetime_context) in local
+    # time instead of UTC, so relative expressions like "tomorrow" or
+    # "tonight" resolve to the right calendar day.
+    timezone: str = "America/Toronto"
+
+    # How many of the most recent chat messages to send to the model per
+    # turn. The full history is always persisted in Postgres regardless —
+    # this only bounds what's sent to LM Studio, so a long-running session
+    # doesn't eventually overflow the local model's context window. 0
+    # disables truncation.
+    chat_history_max_messages: int = 40
+
     # How many days ahead of now to look when auto-injecting the "upcoming
     # appointments" context block into chat (see app/calendar_service.py's
     # fetch_upcoming, used by app/routers/chat.py).

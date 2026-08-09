@@ -30,6 +30,8 @@ class _FakeSettings:
     rag_top_k = 4
     memory_top_k = 6
     calendar_upcoming_days = 7
+    timezone = "America/Toronto"
+    chat_history_max_messages = 40
     otel_exporter_otlp_endpoint = ""
     otel_service_name = "jarvis-api-test"
     minio_endpoint = "http://minio.test:9000"
