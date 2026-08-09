@@ -202,6 +202,23 @@ async def _build_memory_context(
         return None
 
 
+def _build_datetime_context() -> str:
+    """Grounds the model in the real current date/time. Without this, the
+    model falls back to whatever date it last saw in training and mis-
+    resolves relative expressions like "tomorrow" or "next Monday" (e.g.
+    scheduling into 2024). Computed fresh per request, unlike the constant
+    SECRETARY_SYSTEM_PROMPT, since "now" changes on every call.
+    """
+    now = datetime.now(UTC)
+    return (
+        f"The current date and time is {now.isoformat()} (UTC), "
+        f"{now.strftime('%A, %B %d, %Y')}. Use this as the true current "
+        "date/time when resolving relative expressions like \"today\", "
+        "\"tomorrow\", \"next week\", or \"in two days\" — do not assume "
+        "any other current date."
+    )
+
+
 async def _build_calendar_context(db: AsyncSession, settings: Settings) -> str | None:
     """Best-effort: surfaces the user's upcoming appointments so the model
     can answer day/week-planning questions without needing a tool call.
@@ -424,7 +441,10 @@ async def send_message(
     rag_context = await _build_rag_context(db, settings, embedding)
     calendar_context = await _build_calendar_context(db, settings)
 
-    context_messages = [{"role": "system", "content": SECRETARY_SYSTEM_PROMPT}]
+    context_messages = [
+        {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
+        {"role": "system", "content": _build_datetime_context()},
+    ]
     if memory_context is not None:
         context_messages.append({"role": "system", "content": memory_context})
     if rag_context is not None:
