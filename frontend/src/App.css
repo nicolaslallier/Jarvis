@@ -227,6 +227,36 @@
   color: var(--text);
 }
 
+.session-timer {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.session-timer-display {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-h);
+  letter-spacing: 0.04em;
+}
+
+.session-timer-controls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.session-timer-btn {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
 .chat {
   text-align: left;
 }
