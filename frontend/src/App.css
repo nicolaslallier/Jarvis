@@ -140,6 +140,62 @@
   cursor: pointer;
 }
 
+.task-delete {
+  color: #e74c3c;
+  border-color: #e74c3c;
+}
+
+.task-edit-btn {
+  color: #3498db;
+  border-color: #3498db;
+}
+
+.task-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-edit-title {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.task-edit-title:focus,
+.task-edit-desc:focus,
+.task-edit-date:focus {
+  outline: 2px solid var(--accent);
+}
+
+.task-edit-desc {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+  min-height: 60px;
+}
+
+.task-edit-date {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.task-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .files {
   text-align: left;
 }
