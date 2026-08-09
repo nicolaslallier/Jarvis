@@ -16,6 +16,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: ${MINIO_BUCKET:-jarvis}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
     ports:
       - "${API_PORT:-8000}:8000"
     extra_hosts:
@@ -62,6 +63,7 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-jarvis}
       BATCH_JOB_INTERVAL_MINUTES: ${BATCH_JOB_INTERVAL_MINUTES:-15}
       INGEST_CONTAINER_NAME: ${INGEST_CONTAINER_NAME:-jarvis-ingest}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
     # Grants batch root-equivalent access to the Docker host (start/stop/
     # inspect ANY container, create new ones with arbitrary mounts) so its
     # ingest_trigger job can power the `ingest` container on and off — see
@@ -115,7 +117,9 @@ services:
 # can't be referenced via `depends_on` here. Make sure the Infra stack
 # (docker compose up in /Users/nicolaslallier/Claude/Infra) is already
 # running before starting the `api`/`batch`/`ingest` services — all three
-# connect to Infra's Postgres and MinIO over infra-net. `frontend` is on
+# connect to Infra's Postgres and MinIO over infra-net, and `api`/`batch`
+# also connect to Infra's RabbitMQ (`rabbitmq:5672`) for the on-demand
+# ingest trigger (see CLAUDE.md's "Ingestion" section). `frontend` is on
 # infra-net so the Infra repo's shared NGINX can reverse-proxy it at
 # jarvis.infra.famillelallier.net (see nginx/conf.d/jarvis.conf there).
 networks:

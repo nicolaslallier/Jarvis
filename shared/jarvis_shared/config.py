@@ -28,6 +28,12 @@ class SharedSettings(BaseSettings):
     minio_secret_key: str = ""
     minio_bucket: str = "jarvis"
 
+    # RabbitMQ from the Infra repo's shared stack. Same "no per-app
+    # provisioning yet" situation as MinIO above — the user/pass embedded
+    # here must match RABBITMQ_DEFAULT_USER/RABBITMQ_DEFAULT_PASS in the
+    # Infra repo's .env for now.
+    rabbitmq_url: str = "amqp://guest:guest@rabbitmq:5672/"
+
     @property
     def sqlalchemy_url(self) -> str:
         # Infra's documented connection string uses the `postgres://` scheme,

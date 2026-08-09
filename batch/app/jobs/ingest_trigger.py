@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.db import async_session
+from app.docker_ingest import start_container
 from app.health_state import state
 
 logger = logging.getLogger(__name__)
@@ -18,25 +19,6 @@ async def _has_pending_files() -> bool:
             select(StoredFile.id).where(StoredFile.ingested_at.is_(None)).limit(1)
         )
         return result.scalar_one_or_none() is not None
-
-
-def _start_ingest_container(container_name: str) -> str:
-    """Sync (docker-py) — must be called via asyncio.to_thread.
-
-    Talks to the Docker daemon over the socket mounted into this container
-    (see docker-compose.yml's `batch` service and CLAUDE.md's security note
-    on what that mount grants). Returns "started" or "already-running" so
-    the caller can log without a second status check.
-    """
-    client = docker.DockerClient(base_url="unix://var/run/docker.sock")
-    try:
-        container = client.containers.get(container_name)
-        if container.status == "running":
-            return "already-running"
-        container.start()
-        return "started"
-    finally:
-        client.close()
 
 
 async def run() -> None:
@@ -56,7 +38,7 @@ async def run() -> None:
         return
 
     try:
-        outcome = await asyncio.to_thread(_start_ingest_container, settings.ingest_container_name)
+        outcome = await asyncio.to_thread(start_container, settings.ingest_container_name)
     except docker.errors.NotFound:
         # Most likely `docker compose up` hasn't created the ingest service
         # yet — not a crash-worthy condition, just nothing to start.

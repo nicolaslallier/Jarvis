@@ -4,13 +4,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from jarvis_shared.queue import INGEST_COMPLETED_QUEUE, consume
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
 from app.models import FileChunk
-from app.routers import chat, files, health, items, tasks
+from app.routers import chat, files, health, ingest_status, items, tasks
 from app.telemetry import setup_telemetry
+from app.ws_manager import manager as ws_manager
 
 settings = get_settings()
 
@@ -41,7 +43,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if attempt == STARTUP_DB_RETRIES:
                 raise
             await asyncio.sleep(STARTUP_DB_RETRY_DELAY_SECONDS)
-    yield
+
+    ingest_status_task = asyncio.create_task(
+        consume(settings.rabbitmq_url, INGEST_COMPLETED_QUEUE, ws_manager.broadcast)
+    )
+    try:
+        yield
+    finally:
+        ingest_status_task.cancel()
+        try:
+            await ingest_status_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Jarvis API", lifespan=lifespan)
@@ -71,3 +84,4 @@ app.include_router(items.router)
 app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(files.router)
+app.include_router(ingest_status.router)

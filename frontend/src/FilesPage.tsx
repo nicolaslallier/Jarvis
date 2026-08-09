@@ -20,6 +20,8 @@ export default function FilesPage() {
     uploadFile,
     deleteFile,
     downloadUrl,
+    requestIngest,
+    queuedFileIds,
   } = useFiles()
   const [uploading, setUploading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -72,6 +74,14 @@ export default function FilesPage() {
   async function handleDelete(id: number) {
     try {
       await deleteFile(id)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleIngest(id: number) {
+    try {
+      await requestIngest(id)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err))
     }
@@ -146,9 +156,21 @@ export default function FilesPage() {
                   {file.ingested_at ? 'Indexed' : 'Pending'}
                 </span>
               </div>
-              <button type="button" onClick={() => handleDelete(file.id)} className="file-delete">
-                Delete
-              </button>
+              <div className="file-item-actions">
+                {!file.ingested_at && (
+                  <button
+                    type="button"
+                    onClick={() => handleIngest(file.id)}
+                    disabled={queuedFileIds.has(file.id)}
+                    className="file-ingest"
+                  >
+                    {queuedFileIds.has(file.id) ? 'En file d’attente…' : 'Ingérer'}
+                  </button>
+                )}
+                <button type="button" onClick={() => handleDelete(file.id)} className="file-delete">
+                  Delete
+                </button>
+              </div>
             </li>
           ))}
         </ul>

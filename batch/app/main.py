@@ -5,9 +5,11 @@ from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from jarvis_shared.queue import INGEST_REQUESTED_QUEUE, consume
 
 from app.config import get_settings
 from app.healthserver import start_health_server
+from app.ingest_consumer import handle_ingest_requested
 from app.jobs import registered_jobs
 from app.telemetry import setup_telemetry
 
@@ -39,6 +41,11 @@ async def main() -> None:
     scheduler.start()
     logger.info("jarvis-batch scheduler started with %d job(s)", len(jobs))
 
+    ingest_consumer_task = asyncio.create_task(
+        consume(settings.rabbitmq_url, INGEST_REQUESTED_QUEUE, handle_ingest_requested)
+    )
+    logger.info("jarvis-batch ingest consumer listening on %s", INGEST_REQUESTED_QUEUE)
+
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -47,6 +54,11 @@ async def main() -> None:
     await stop_event.wait()
     logger.info("shutting down")
     scheduler.shutdown(wait=False)
+    ingest_consumer_task.cancel()
+    try:
+        await ingest_consumer_task
+    except asyncio.CancelledError:
+        pass
     health_server.shutdown()
 
 
