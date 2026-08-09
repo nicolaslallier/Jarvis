@@ -26,6 +26,10 @@ class _FakeSettings:
     lmstudio_model = "test-model"
     otel_exporter_otlp_endpoint = ""
     otel_service_name = "jarvis-api-test"
+    minio_endpoint = "http://minio.test:9000"
+    minio_access_key = "test-access-key"
+    minio_secret_key = "test-secret-key"
+    minio_bucket = "jarvis-test"
 
 
 # Patch before any app import — fixtures don't run during module load.
