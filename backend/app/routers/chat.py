@@ -74,6 +74,12 @@ SECRETARY_SYSTEM_PROMPT = (
     "call it, say so instead of confirming the change."
 )
 
+TITLE_GENERATION_SYSTEM_PROMPT = (
+    "Summarize the user's message as a short chat title of 3 to 6 words. "
+    "Respond with only the title text — no quotes, no punctuation at the "
+    "end, no preamble."
+)
+
 # OpenAI-compatible tool schema letting the model manage the user's calendar
 # directly (create/reschedule/cancel/list appointments) instead of only
 # being able to discuss the upcoming-appointments context injected below.
@@ -514,13 +520,6 @@ async def _execute_tool_call(db: AsyncSession, name: str, arguments: dict) -> di
     return await _execute_calendar_tool_call(db, name, arguments)
 
 
-def _extract_message(data: dict) -> dict:
-    try:
-        return data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
-
-
 async def _stream_attempt(settings: Settings, messages: list[dict], tools: list[dict] | None):
     """Opens one streaming LM Studio chat-completion call and yields event
     dicts as the response arrives:
@@ -773,7 +772,7 @@ async def _stream_send_message(
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
             final_content, final_tool_calls = None, None
-            tools_to_offer = CALENDAR_TOOLS if tools_supported else None
+            tools_to_offer = TOOLS if tools_supported else None
             try:
                 async for sse_event in _consume(_stream_attempt(settings, messages, tools_to_offer)):
                     yield sse_event
@@ -798,7 +797,7 @@ async def _stream_send_message(
                     arguments = json.loads(function.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     arguments = {}
-                result = await _execute_calendar_tool_call(db, function.get("name", ""), arguments)
+                result = await _execute_tool_call(db, function.get("name", ""), arguments)
                 tool_result_messages.append(
                     {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
                 )
@@ -890,62 +889,7 @@ async def send_message(
         context_messages.append({"role": "system", "content": task_context})
     messages_for_model = context_messages + history
 
-    response = await _call_lmstudio(settings, messages_for_model, tools=TOOLS)
-    if response.status_code != 200:
-        # Some LM Studio/model combinations reject the `tools` field
-        # outright — retry once without it so chat still works. Tool
-        # calling is a capability boost, never a reason a message fails.
-        response = await _call_lmstudio(settings, messages_for_model, tools=None)
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502, detail=f"LM Studio returned {response.status_code}: {response.text}"
-        )
-
-    message = _extract_message(response.json())
-
-    tool_calls = message.get("tool_calls")
-    if tool_calls:
-        assistant_tool_message = {
-            "role": "assistant",
-            "content": message.get("content"),
-            "tool_calls": tool_calls,
-        }
-        tool_result_messages = []
-        for call in tool_calls:
-            function = call.get("function", {})
-            try:
-                arguments = json.loads(function.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                arguments = {}
-            result = await _execute_tool_call(db, function.get("name", ""), arguments)
-            tool_result_messages.append(
-                {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
-            )
-
-        followup_response = await _call_lmstudio(
-            settings, messages_for_model + [assistant_tool_message] + tool_result_messages, tools=None
-        )
-        if followup_response.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail=f"LM Studio returned {followup_response.status_code}: {followup_response.text}",
-            )
-        message = _extract_message(followup_response.json())
-
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio")
-
-    assistant_message = ChatMessageRecord(session_id=session.id, role="assistant", content=content)
-    db.add(assistant_message)
-    await db.commit()
-    await db.refresh(session)
-    await db.refresh(assistant_message)
-
-    await _record_memories(db, settings, session.id, payload.content, content)
-
-    return ChatSendResponse(
-        session=ChatSessionRead.model_validate(session),
-        user_message=ChatMessageRead.model_validate(user_message),
-        assistant_message=ChatMessageRead.model_validate(assistant_message),
+    return StreamingResponse(
+        _stream_send_message(db, settings, session, user_message, messages_for_model),
+        media_type="text/event-stream",
     )

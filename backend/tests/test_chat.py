@@ -9,6 +9,7 @@ import pytest
 
 from app.memory import RetrievedMemory
 from app.rag import RetrievedChunk
+from app.routers import chat as chat_module
 from app.routers.chat import SECRETARY_SYSTEM_PROMPT, TOOLS
 
 STREAM_URL = "http://lmstudio.test/v1/chat/completions"
@@ -382,7 +383,7 @@ async def test_send_message_unreachable_still_persists_user_message(client):
     assert response.status_code == 200
     events = _parse_sse(response.text)
     error_event = next(e for e in events if e["type"] == "error")
-    assert "Could not reach LM Studio" in error_event["detail"]
+    assert error_event["detail"] == "An internal error occurred while streaming the response."
 
     detail = (await client.get(f"/chat/sessions/{session['id']}")).json()
     assert [m["content"] for m in detail["messages"]] == ["hello"]
@@ -408,7 +409,7 @@ async def test_send_message_upstream_error_status(client):
     assert response.status_code == 200
     events = _parse_sse(response.text)
     error_event = next(e for e in events if e["type"] == "error")
-    assert "LM Studio returned 500" in error_event["detail"]
+    assert error_event["detail"] == "An internal error occurred while streaming the response."
 
 
 @pytest.mark.asyncio
@@ -754,7 +755,7 @@ async def test_send_message_first_completion_call_offers_calendar_tools(client):
 
     assert response.status_code == 200
     _, completion_json = next(
-        c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")
+        c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")
     )
     assert completion_json["tools"] == TOOLS
     assert completion_json["tool_choice"] == "auto"
@@ -817,11 +818,14 @@ async def test_send_message_executes_calendar_tool_call(client):
     # third is the best-effort memory-extraction call that runs after
     # (unrelated to tool calling, and this fake client has no response
     # queued for it, so it fails harmlessly — see other memory tests).
-    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    completion_calls = [c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")]
     assert len(completion_calls) >= 2
     assert completion_calls[0][1]["tools"] == TOOLS
     followup_payload = completion_calls[1][1]
-    assert "tools" not in followup_payload
+    # The tool-calling loop offers tools again on the follow-up call too
+    # (see MAX_TOOL_ITERATIONS) — it only stops once a reply comes back
+    # without further tool calls.
+    assert followup_payload["tools"] == TOOLS
     tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
     result = json.loads(tool_message["content"])
     assert result["appointment"]["title"] == "Dentist"
@@ -836,20 +840,20 @@ async def test_send_message_executes_task_tool_call(client):
     tool_calls = [
         {
             "id": "call_1",
-            "type": "function",
             "function": {
                 "name": "create_task",
                 "arguments": json.dumps({"title": "Buy corn", "priority": "high"}),
             },
         }
     ]
-    responses = {
-        "http://lmstudio.test/v1/chat/completions": [
-            _tool_call_response(tool_calls),
-            _ok_response("Added \"Buy corn\" to your tasks."),
-        ],
-    }
-    fake_client = _SequentialFakeLMStudioClient(responses)
+    fake_client = _FakeLMStudioClient(
+        stream_responses={
+            STREAM_URL: [
+                _tool_call_stream(tool_calls),
+                _content_stream('Added "Buy corn" to your tasks.'),
+            ]
+        }
+    )
 
     with (
         patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
@@ -862,13 +866,17 @@ async def test_send_message_executes_task_tool_call(client):
         )
 
     assert response.status_code == 200
-    assert response.json()["assistant_message"]["content"] == 'Added "Buy corn" to your tasks.'
+    events = _parse_sse(response.text)
+    tool_call_event = next(e for e in events if e["type"] == "tool_call")
+    assert tool_call_event["name"] == "create_task"
+    done = next(e for e in events if e["type"] == "done")
+    assert done["assistant_message"]["content"] == 'Added "Buy corn" to your tasks.'
 
     list_response = await client.get("/tasks")
     titles = [t["title"] for t in list_response.json()]
     assert "Buy corn" in titles
 
-    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    completion_calls = [c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")]
     assert len(completion_calls) >= 2
     followup_payload = completion_calls[1][1]
     tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
@@ -903,11 +911,13 @@ async def test_send_message_falls_back_when_tools_rejected(client):
         )
 
     assert response.status_code == 200
-    assert response.json()["assistant_message"]["content"] == "plain reply"
+    events = _parse_sse(response.text)
+    done = next(e for e in events if e["type"] == "done")
+    assert done["assistant_message"]["content"] == "plain reply"
 
     # First two completions calls are the tools-rejected retry round trip; a
     # possible third is the best-effort memory-extraction call afterward.
-    completion_calls = [c for c in fake_client.calls if c[0].endswith("/v1/chat/completions")]
+    completion_calls = [c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")]
     assert len(completion_calls) >= 2
     assert completion_calls[0][1]["tools"] == TOOLS
     assert "tools" not in completion_calls[1][1]
