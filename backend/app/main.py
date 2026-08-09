@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.routers import health, items, tasks
+from app.routers import chat, health, items, tasks
 
 settings = get_settings()
 
@@ -46,3 +46,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(items.router)
 app.include_router(tasks.router)
+app.include_router(chat.router)

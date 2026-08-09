@@ -6,8 +6,14 @@ services:
       DATABASE_URL: postgres://jarvis:${JARVIS_DB_PASSWORD}@postgres:5432/jarvis
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       APP_ENV: ${APP_ENV:-development}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234}
+      LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-google/gemma-4-26b-a4b-qat}
     ports:
       - "${API_PORT:-8000}:8000"
+    extra_hosts:
+      # `host.docker.internal` resolves out of the box on Docker Desktop
+      # (Mac/Windows); this mapping makes it also resolve on Linux hosts.
+      - "host.docker.internal:host-gateway"
     networks:
       - infra-net
 

@@ -4,3 +4,4 @@ sqlalchemy>=2.0
 asyncpg
 greenlet
 pydantic-settings
+httpx

@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import HealthStatus from './HealthStatus'
 import TasksPage from './TasksPage'
+import ChatPage from './ChatPage'
 import './App.css'
 
 function App() {
@@ -12,6 +13,9 @@ function App() {
         </NavLink>
         <NavLink to="/tasks" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Tasks
+        </NavLink>
+        <NavLink to="/chat" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
+          Chat
         </NavLink>
       </nav>
       <Routes>
@@ -25,6 +29,7 @@ function App() {
           }
         />
         <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/chat" element={<ChatPage />} />
       </Routes>
     </main>
   )

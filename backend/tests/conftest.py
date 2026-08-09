@@ -22,6 +22,9 @@ class _FakeSettings:
     def cors_origin_list(self) -> list[str]:
         return ["*"]
 
+    lmstudio_base_url = "http://lmstudio.test"
+    lmstudio_model = "test-model"
+
 
 # Patch before any app import — fixtures don't run during module load.
 _monkey = MonkeyPatch()
