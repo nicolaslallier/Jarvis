@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chunking import chunk_text
 from app.config import Settings
 from app.embeddings import EmbeddingError, embed_chunks
+from app.image_description import ImageDescriptionError, describe_image
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ _TEXT_CONTENT_TYPES = {"application/json"}
 _TEXT_FILE_EXTENSIONS = (".txt", ".md")
 _PDF_CONTENT_TYPE = "application/pdf"
 _PDF_FILE_EXTENSION = ".pdf"
+_IMAGE_CONTENT_TYPE_PREFIX = "image/"
+_IMAGE_FILE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
 def is_pdf(filename: str, content_type: str | None) -> bool:
@@ -29,9 +32,17 @@ def is_pdf(filename: str, content_type: str | None) -> bool:
     return filename.lower().endswith(_PDF_FILE_EXTENSION)
 
 
+def is_image(filename: str, content_type: str | None) -> bool:
+    if content_type:
+        return content_type.startswith(_IMAGE_CONTENT_TYPE_PREFIX)
+    return filename.lower().endswith(_IMAGE_FILE_EXTENSIONS)
+
+
 def is_supported_text(filename: str, content_type: str | None) -> bool:
-    """Plainly-text content and PDFs are extracted. Other binary formats
-    (DOCX, images) are a deliberately deferred follow-up."""
+    """Plainly-text content and PDFs are extracted directly. Images are
+    handled separately via describe_image (there's no text to extract from
+    raw image bytes). Other binary formats (DOCX) are a deliberately
+    deferred follow-up."""
     if is_pdf(filename, content_type):
         return True
     if content_type:
@@ -69,7 +80,8 @@ async def process_file(session: AsyncSession, settings: Settings, file: StoredFi
     """Process one file. Returns True if it's now considered done (ingested,
     or deliberately skipped as unsupported) and False if it should be
     retried on the next trigger."""
-    if not is_supported_text(file.filename, file.content_type):
+    image = is_image(file.filename, file.content_type)
+    if not image and not is_supported_text(file.filename, file.content_type):
         logger.info(
             "ingest: skipping unsupported content-type filename=%s content_type=%s",
             file.filename,
@@ -85,13 +97,20 @@ async def process_file(session: AsyncSession, settings: Settings, file: StoredFi
         logger.exception("ingest: failed to fetch %s from MinIO", file.object_key)
         return False
 
-    try:
-        text = extract_text(file.filename, file.content_type, raw)
-    except Exception:
-        logger.exception("ingest: failed to extract text from file_id=%s filename=%s", file.id, file.filename)
-        file.ingested_at = datetime.now(UTC)
-        await session.commit()
-        return True
+    if image:
+        try:
+            text = await describe_image(settings, file.filename, file.content_type, raw)
+        except ImageDescriptionError:
+            logger.exception("ingest: failed to describe image for file_id=%s", file.id)
+            return False
+    else:
+        try:
+            text = extract_text(file.filename, file.content_type, raw)
+        except Exception:
+            logger.exception("ingest: failed to extract text from file_id=%s filename=%s", file.id, file.filename)
+            file.ingested_at = datetime.now(UTC)
+            await session.commit()
+            return True
 
     chunks = chunk_text(
         text, chunk_size_chars=settings.chunk_size_chars, chunk_overlap_chars=settings.chunk_overlap_chars

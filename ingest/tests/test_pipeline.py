@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.embeddings import EmbeddingError
-from app.pipeline import extract_text, is_pdf, is_supported_text, run_pipeline
+from app.image_description import ImageDescriptionError
+from app.pipeline import extract_text, is_image, is_pdf, is_supported_text, run_pipeline
 
 
 class _FakeBody:
@@ -109,7 +110,12 @@ async def test_failed_embedding_leaves_file_unprocessed_and_writes_no_chunks(ses
 
 @pytest.mark.asyncio
 async def test_unsupported_content_type_is_skipped_but_stamped(session):
-    file = await _add_file(session, object_key="k3", filename="image.png", content_type="image/png")
+    file = await _add_file(
+        session,
+        object_key="k3",
+        filename="report.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
     succeeded, failed = await run_pipeline(session, _settings())
 
@@ -120,6 +126,65 @@ async def test_unsupported_content_type_is_skipped_but_stamped(session):
 
     result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
     assert result.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_image_file_is_described_chunked_and_embedded(session):
+    file = await _add_file(session, object_key="k7", filename="photo.png", content_type="image/png")
+
+    async def fake_describe(settings, filename, content_type, raw):
+        return "a" * 30
+
+    async def fake_embed(settings, chunks):
+        return [[0.1, 0.2, 0.3] for _ in chunks]
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k7": b"fake-png-bytes"})),
+        patch("app.pipeline.describe_image", side_effect=fake_describe),
+        patch("app.pipeline.embed_chunks", side_effect=fake_embed),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    chunks = result.scalars().all()
+    assert len(chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_image_description_failure_leaves_file_unprocessed(session):
+    file = await _add_file(session, object_key="k8", filename="photo.png", content_type="image/png")
+
+    async def fake_describe_fail(settings, filename, content_type, raw):
+        raise ImageDescriptionError("boom")
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k8": b"fake-png-bytes"})),
+        patch("app.pipeline.describe_image", side_effect=fake_describe_fail),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (0, 1)
+
+    await session.refresh(file)
+    assert file.ingested_at is None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert result.scalars().all() == []
+
+
+def test_is_image_by_content_type():
+    assert is_image("photo.png", "image/png") is True
+    assert is_image("doc.pdf", "application/pdf") is False
+
+
+def test_is_image_by_extension_when_content_type_missing():
+    assert is_image("photo.jpg", None) is True
+    assert is_image("doc.txt", None) is False
 
 
 @pytest.mark.asyncio
