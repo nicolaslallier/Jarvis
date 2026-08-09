@@ -1,16 +1,19 @@
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import calendar_service, task_service
 from app.config import Settings, get_settings
-from app.db import get_db
+from app.db import async_session, get_db
 from app.memory import (
     EXTRACTION_SYSTEM_PROMPT,
     fetch_relevant_memories,
@@ -23,7 +26,6 @@ from app.rag import fetch_relevant_chunks, format_context
 from app.schemas import (
     ChatMessageRead,
     ChatSendRequest,
-    ChatSendResponse,
     ChatSessionCreate,
     ChatSessionDetail,
     ChatSessionRead,
@@ -36,8 +38,15 @@ router = APIRouter()
 LMSTUDIO_TIMEOUT_SECONDS = 120.0
 EMBEDDING_TIMEOUT_SECONDS = 30.0
 MEMORY_EXTRACTION_TIMEOUT_SECONDS = 30.0
+TITLE_GENERATION_TIMEOUT_SECONDS = 15.0
 DEFAULT_SESSION_TITLE = "New chat"
 TITLE_MAX_LENGTH = 50
+
+# Safety cap on how many times the model can chain tool calls (list, then
+# act on what it saw, etc.) before we force a final natural-language answer
+# without offering tools. Without a cap, a model stuck calling tools in a
+# loop would never return a reply to the user.
+MAX_TOOL_ITERATIONS = 5
 
 # Always the first message sent to the model, establishing the assistant's
 # persona. Memory/RAG context (below) is appended after this, not folded
@@ -69,9 +78,9 @@ SECRETARY_SYSTEM_PROMPT = (
 # directly (create/reschedule/cancel/list appointments) instead of only
 # being able to discuss the upcoming-appointments context injected below.
 # Not every LM Studio model/version supports tool calling — see
-# _call_lmstudio's fallback, which retries without this if the model
-# rejects it, so calendar tools are a capability boost, never a chat
-# dependency.
+# _stream_attempt's _ToolsRejected handling, which retries without this if
+# the model rejects it, so calendar tools are a capability boost, never a
+# chat dependency.
 CALENDAR_TOOLS = [
     {
         "type": "function",
@@ -228,6 +237,42 @@ TASK_TOOLS = [
 TOOLS = CALENDAR_TOOLS + TASK_TOOLS
 
 
+# Fire-and-forget tasks (memory extraction, title generation) are started
+# with asyncio.create_task rather than awaited, so they can't add latency to
+# the response. asyncio only holds a *weak* reference to a task that isn't
+# stored anywhere, so without this module-level set the task can be garbage
+# collected mid-run — keeping a strong reference here (discarded via the
+# done callback once it finishes) is the standard workaround.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _fire_and_forget(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _sse(payload: dict) -> bytes:
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+class LMStudioStreamError(Exception):
+    """A streaming LM Studio call failed in a way that isn't recoverable —
+    raised from inside the SSE generator after the HTTP response (200,
+    text/event-stream) has already been sent, so it's caught and turned
+    into an in-band `{"type": "error"}` SSE event rather than an HTTP error
+    status, which can no longer be changed at that point."""
+
+
+class _ToolsRejected(Exception):
+    """Raised when a streaming call made with `tools` set fails outright —
+    some LM Studio model/version combinations reject the field entirely.
+    Caught one level up so the caller can retry once without tools."""
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+
 async def _embed_text(settings: Settings, query: str) -> list[float] | None:
     """Best-effort: embeds `query` via LM Studio. Shared by RAG file-chunk
     retrieval and memory retrieval below so a single incoming message only
@@ -274,7 +319,7 @@ async def _build_rag_context(
 async def _build_memory_context(
     db: AsyncSession, settings: Settings, embedding: list[float] | None
 ) -> str | None:
-    """Best-effort counterpart to _build_rag_context, for facts remembered
+    """Best-effort counterpart to _build_rag_context, for facts learned
     from earlier conversations instead of uploaded documents."""
     if embedding is None:
         return None
@@ -288,20 +333,27 @@ async def _build_memory_context(
         return None
 
 
-def _build_datetime_context() -> str:
-    """Grounds the model in the real current date/time. Without this, the
-    model falls back to whatever date it last saw in training and mis-
-    resolves relative expressions like "tomorrow" or "next Monday" (e.g.
-    scheduling into 2024). Computed fresh per request, unlike the constant
-    SECRETARY_SYSTEM_PROMPT, since "now" changes on every call.
+def _build_datetime_context(settings: Settings) -> str:
+    """Grounds the model in the real current date/time, in the user's own
+    timezone rather than UTC — otherwise relative expressions like "today"
+    or "tonight" can resolve to the wrong calendar day whenever it's
+    already tomorrow in UTC but still today locally (or vice versa).
+    Computed fresh per request, unlike the constant SECRETARY_SYSTEM_PROMPT,
+    since "now" changes on every call.
     """
-    now = datetime.now(UTC)
+    now_utc = datetime.now(UTC)
+    try:
+        tz = ZoneInfo(settings.timezone)
+    except Exception:
+        logger.warning("Unknown TIMEZONE %r, falling back to UTC", settings.timezone)
+        tz = UTC
+    now_local = now_utc.astimezone(tz)
     return (
-        f"The current date and time is {now.isoformat()} (UTC), "
-        f"{now.strftime('%A, %B %d, %Y')}. Use this as the true current "
-        "date/time when resolving relative expressions like \"today\", "
-        "\"tomorrow\", \"next week\", or \"in two days\" — do not assume "
-        "any other current date."
+        f"The current date and time is {now_local.isoformat()} ({settings.timezone}), "
+        f"{now_local.strftime('%A, %B %d, %Y')} at {now_local.strftime('%H:%M')}. Use this "
+        "as the true current date/time — already in the user's local timezone — when "
+        "resolving relative expressions like \"today\", \"tonight\", \"tomorrow\", \"next "
+        "week\", or \"in two days\". Do not assume any other current date or timezone."
     )
 
 
@@ -469,22 +521,117 @@ def _extract_message(data: dict) -> dict:
         raise HTTPException(status_code=502, detail="Unexpected response shape from LM Studio") from exc
 
 
-async def _call_lmstudio(
-    settings: Settings, messages: list[dict], tools: list[dict] | None
-) -> httpx.Response:
-    payload: dict = {"model": settings.lmstudio_model, "messages": messages}
+    Raises `_ToolsRejected` if the call was made with `tools` set and LM
+    Studio rejected it outright (some model/version combos don't support
+    tool calling) — the caller retries once without tools. Raises
+    `LMStudioStreamError` for anything else that goes wrong (network error,
+    non-200 without tools).
+    """
+    payload: dict = {"model": settings.lmstudio_model, "messages": messages, "stream": True}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+
+    content_parts: list[str] = []
+    tool_call_acc: dict[int, dict] = {}
+
     try:
         async with httpx.AsyncClient(timeout=LMSTUDIO_TIMEOUT_SECONDS) as client:
-            return await client.post(
-                f"{settings.lmstudio_base_url}/v1/chat/completions", json=payload
-            )
+            async with client.stream(
+                "POST", f"{settings.lmstudio_base_url}/v1/chat/completions", json=payload
+            ) as response:
+                if response.status_code != 200:
+                    body = (await response.aread()).decode(errors="replace")
+                    if tools:
+                        raise _ToolsRejected(body)
+                    raise LMStudioStreamError(f"LM Studio returned {response.status_code}: {body}")
+
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if not data:
+                        continue
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices") or []
+                    delta = choices[0].get("delta", {}) if choices else {}
+
+                    text = delta.get("content")
+                    if text:
+                        content_parts.append(text)
+                        yield {"kind": "delta", "text": text}
+
+                    for tool_call_delta in delta.get("tool_calls") or []:
+                        index = tool_call_delta.get("index", 0)
+                        acc = tool_call_acc.setdefault(
+                            index,
+                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                        )
+                        if tool_call_delta.get("id"):
+                            acc["id"] = tool_call_delta["id"]
+                        function_delta = tool_call_delta.get("function") or {}
+                        if function_delta.get("name"):
+                            acc["function"]["name"] = function_delta["name"]
+                        if function_delta.get("arguments"):
+                            acc["function"]["arguments"] += function_delta["arguments"]
     except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Could not reach LM Studio at {settings.lmstudio_base_url}: {exc}"
+        raise LMStudioStreamError(
+            f"Could not reach LM Studio at {settings.lmstudio_base_url}: {exc}"
         ) from exc
+
+    tool_calls = [tool_call_acc[i] for i in sorted(tool_call_acc)] or None
+    yield {"kind": "final", "content": "".join(content_parts), "tool_calls": tool_calls}
+
+
+async def _generate_title(settings: Settings, content: str) -> str | None:
+    """Best-effort: asks the chat model to summarize the first message into
+    a short title, replacing the naive first-N-characters truncation once
+    it's ready (see _generate_title_task). Any failure just means the
+    fallback title sticks around."""
+    try:
+        async with httpx.AsyncClient(timeout=TITLE_GENERATION_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{settings.lmstudio_base_url}/v1/chat/completions",
+                json={
+                    "model": settings.lmstudio_model,
+                    "messages": [
+                        {"role": "system", "content": TITLE_GENERATION_SYSTEM_PROMPT},
+                        {"role": "user", "content": content},
+                    ],
+                    "max_tokens": 20,
+                },
+            )
+        if response.status_code != 200:
+            logger.warning("Title generation call returned %s", response.status_code)
+            return None
+        title = response.json()["choices"][0]["message"]["content"]
+        title = title.strip().strip('"').strip()
+        if not title:
+            return None
+        return _title_from_content(title)
+    except Exception:
+        logger.warning("Title generation failed", exc_info=True)
+        return None
+
+
+async def _generate_title_task(settings: Settings, session_id: int, content: str) -> None:
+    title = await _generate_title(settings, content)
+    if not title:
+        return
+    fallback_title = _title_from_content(content)
+    async with async_session() as db:
+        session = await db.get(ChatSession, session_id)
+        if session is None:
+            return
+        # Only overwrite the title if it's still whatever send_message set
+        # as an instant fallback — if the user (or a future rename feature)
+        # changed it in the meantime, don't clobber that.
+        if session.title not in (DEFAULT_SESSION_TITLE, fallback_title):
+            return
+        session.title = title
+        await db.commit()
 
 
 async def _record_memories(
@@ -492,11 +639,7 @@ async def _record_memories(
 ) -> None:
     """Best-effort: asks the chat model to pull any durable facts out of
     this exchange, embeds them, and stores them for retrieval on later
-    messages/sessions (see app/memory.py). Runs after the reply has already
-    been generated and persisted, so any failure here (LM Studio
-    unreachable, unparseable extraction reply, embedding failure) never
-    blocks the chat send that's already succeeded.
-    """
+    messages/sessions (see app/memory.py)."""
     try:
         exchange = f"User: {user_content}\nAssistant: {assistant_content}"
         async with httpx.AsyncClient(timeout=MEMORY_EXTRACTION_TIMEOUT_SECONDS) as client:
@@ -534,6 +677,16 @@ async def _record_memories(
         await store_memories(db, session_id, facts, embeddings)
     except Exception:
         logger.warning("Memory extraction/storage failed", exc_info=True)
+
+
+async def _record_memories_task(
+    settings: Settings, session_id: int, user_content: str, assistant_content: str
+) -> None:
+    """Runs _record_memories with its own DB session, since this fires via
+    asyncio.create_task and keeps running after the request's own `db`
+    session (from Depends(get_db)) has already been closed."""
+    async with async_session() as db:
+        await _record_memories(db, settings, session_id, user_content, assistant_content)
 
 
 def _title_from_content(content: str) -> str:
@@ -575,17 +728,120 @@ async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)) ->
     await db.commit()
 
 
-@router.post("/chat/sessions/{session_id}/messages", response_model=ChatSendResponse)
+async def _stream_send_message(
+    db: AsyncSession,
+    settings: Settings,
+    session: ChatSession,
+    user_message: ChatMessageRecord,
+    messages_for_model: list[dict],
+):
+    """The SSE response body for POST /chat/sessions/{id}/messages. Runs the
+    tool-calling loop (up to MAX_TOOL_ITERATIONS) against streaming LM
+    Studio calls, relaying content deltas to the client as they arrive, then
+    persists the assistant's reply and fires memory extraction off the
+    critical path before sending the final `done` event.
+    """
+    yield _sse(
+        {"type": "user_message", "message": ChatMessageRead.model_validate(user_message).model_dump(mode="json")}
+    )
+    yield _sse({"type": "session", "session": ChatSessionRead.model_validate(session).model_dump(mode="json")})
+
+    messages = list(messages_for_model)
+    tools_supported = True
+    final_content: str | None = None
+    final_tool_calls: list[dict] | None = None
+
+    def _consume(stream):
+        async def _gen():
+            nonlocal final_content, final_tool_calls
+            async for event in stream:
+                if event["kind"] == "delta":
+                    yield _sse({"type": "delta", "content": event["text"]})
+                else:
+                    final_content = event["content"]
+                    final_tool_calls = event["tool_calls"]
+
+        return _gen()
+
+    try:
+        for _ in range(MAX_TOOL_ITERATIONS):
+            final_content, final_tool_calls = None, None
+            tools_to_offer = CALENDAR_TOOLS if tools_supported else None
+            try:
+                async for sse_event in _consume(_stream_attempt(settings, messages, tools_to_offer)):
+                    yield sse_event
+            except _ToolsRejected:
+                tools_supported = False
+                async for sse_event in _consume(_stream_attempt(settings, messages, None)):
+                    yield sse_event
+
+            if not final_tool_calls:
+                break
+
+            assistant_tool_message = {
+                "role": "assistant",
+                "content": final_content,
+                "tool_calls": final_tool_calls,
+            }
+            tool_result_messages = []
+            for call in final_tool_calls:
+                function = call.get("function", {})
+                yield _sse({"type": "tool_call", "name": function.get("name", "")})
+                try:
+                    arguments = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+                result = await _execute_calendar_tool_call(db, function.get("name", ""), arguments)
+                tool_result_messages.append(
+                    {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
+                )
+            messages = messages + [assistant_tool_message] + tool_result_messages
+        else:
+            # Exhausted MAX_TOOL_ITERATIONS and the model is still trying to
+            # call tools — force a final natural-language answer.
+            final_content, final_tool_calls = None, None
+            async for sse_event in _consume(_stream_attempt(settings, messages, None)):
+                yield sse_event
+    except LMStudioStreamError as exc:
+        logger.exception("LM Studio streaming failed", exc_info=exc)
+        yield _sse({"type": "error", "detail": "An internal error occurred while streaming the response."})
+        return
+
+    if not isinstance(final_content, str):
+        yield _sse({"type": "error", "detail": "Unexpected response shape from LM Studio"})
+        return
+
+    assistant_message = ChatMessageRecord(session_id=session.id, role="assistant", content=final_content)
+    db.add(assistant_message)
+    await db.commit()
+    await db.refresh(session)
+    await db.refresh(assistant_message)
+
+    _fire_and_forget(
+        _record_memories_task(settings, session.id, user_message.content, final_content)
+    )
+
+    yield _sse(
+        {
+            "type": "done",
+            "assistant_message": ChatMessageRead.model_validate(assistant_message).model_dump(mode="json"),
+            "session": ChatSessionRead.model_validate(session).model_dump(mode="json"),
+        }
+    )
+
+
+@router.post("/chat/sessions/{session_id}/messages")
 async def send_message(
     session_id: int, payload: ChatSendRequest, db: AsyncSession = Depends(get_db)
-) -> ChatSendResponse:
+) -> StreamingResponse:
     session = await db.get(ChatSession, session_id, options=[selectinload(ChatSession.messages)])
     if session is None:
         raise HTTPException(status_code=404, detail="chat session not found")
 
     user_message = ChatMessageRecord(session_id=session.id, role="user", content=payload.content)
     session.messages.append(user_message)
-    if session.title == DEFAULT_SESSION_TITLE:
+    is_first_message = session.title == DEFAULT_SESSION_TITLE
+    if is_first_message:
         session.title = _title_from_content(payload.content)
     # Appending a child message doesn't dirty the parent row on its own, so
     # `updated_at`'s onupdate wouldn't fire — touch it explicitly to keep
@@ -599,7 +855,13 @@ async def send_message(
     await db.refresh(user_message)
 
     settings = get_settings()
+
+    if is_first_message:
+        _fire_and_forget(_generate_title_task(settings, session.id, payload.content))
+
     history = [{"role": m.role, "content": m.content} for m in session.messages]
+    if settings.chat_history_max_messages > 0:
+        history = history[-settings.chat_history_max_messages :]
 
     embedding = await _embed_text(settings, payload.content)
     memory_context = await _build_memory_context(db, settings, embedding)
@@ -609,7 +871,7 @@ async def send_message(
 
     context_messages = [
         {"role": "system", "content": SECRETARY_SYSTEM_PROMPT},
-        {"role": "system", "content": _build_datetime_context()},
+        {"role": "system", "content": _build_datetime_context(settings)},
     ]
     if memory_context is not None:
         context_messages.append({"role": "system", "content": memory_context})

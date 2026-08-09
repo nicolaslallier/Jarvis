@@ -598,9 +598,24 @@
   align-items: center;
   gap: 6px;
   max-width: 160px;
+  padding: 0;
+}
+
+.chat-session-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 0 6px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
 }
 
 .chat-session-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -612,8 +627,14 @@
 }
 
 .chat-session-delete {
+  flex: 0 0 auto;
+  font: inherit;
+  padding: 6px 10px 6px 4px;
+  border: none;
+  background: none;
   color: var(--text);
   line-height: 1;
+  cursor: pointer;
 }
 
 .chat-session-delete:hover {
@@ -665,20 +686,93 @@
 .chat-message-content {
   margin: 4px 0 0;
   color: var(--text-h);
+}
+
+.chat-message-content > *:first-child {
+  margin-top: 0;
+}
+
+.chat-message-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-content p {
   white-space: pre-wrap;
+  margin: 0.4em 0;
+}
+
+.chat-message-content ul,
+.chat-message-content ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+
+.chat-message-content pre {
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.chat-message-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.chat-message-content :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.chat-message-content table {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+}
+
+.chat-message-content th,
+.chat-message-content td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+}
+
+.chat-tool-activity {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-style: italic;
+}
+
+.chat-messages-end {
+  height: 0;
 }
 
 .chat-error {
   color: #e74c3c;
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-retry {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid #e74c3c;
+  border-radius: 6px;
+  background: none;
+  color: #e74c3c;
+  cursor: pointer;
 }
 
 .chat-form {
   display: flex;
   gap: 8px;
+  align-items: flex-end;
 }
 
-.chat-form input {
+.chat-form textarea {
   flex: 1;
   font: inherit;
   padding: 8px 10px;
@@ -686,6 +780,10 @@
   border-radius: 6px;
   background: var(--bg);
   color: var(--text-h);
+  resize: none;
+  max-height: 160px;
+  overflow-y: auto;
+  line-height: 1.4;
 }
 
 .chat-form button {
