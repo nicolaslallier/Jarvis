@@ -1,5 +1,6 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import HealthStatus from './HealthStatus'
+import SessionTimer from './SessionTimer'
 import TasksPage from './TasksPage'
 import ChatPage from './ChatPage'
 import FilesPage from './FilesPage'
@@ -28,6 +29,7 @@ function App() {
           element={
             <>
               <h1>Jarvis Portal</h1>
+              <SessionTimer />
               <HealthStatus />
             </>
           }
