@@ -4,6 +4,8 @@
 # requirements-dev.txt for local dev.
 httpx
 pypdf
+pypdfium2
+Pillow
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-logging
