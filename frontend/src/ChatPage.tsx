@@ -1,29 +1,75 @@
 import { useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, MouseEvent } from 'react'
 import { useChat } from './useChat'
 
 export default function ChatPage() {
-  const { messages, state, sendMessage } = useChat()
+  const {
+    sessions,
+    activeSessionId,
+    messages,
+    state,
+    selectSession,
+    createSession,
+    deleteSession,
+    sendMessage,
+  } = useChat()
   const [input, setInput] = useState('')
+
+  const busy = state.phase === 'sending' || state.phase === 'loading'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!input.trim() || state.phase === 'sending') return
+    if (!input.trim() || busy) return
     const content = input
     setInput('')
     await sendMessage(content)
+  }
+
+  async function handleDelete(e: MouseEvent, id: number) {
+    e.stopPropagation()
+    await deleteSession(id)
   }
 
   return (
     <div className="chat">
       <h1>Chat</h1>
 
+      <div className="chat-sessions">
+        <button type="button" className="chat-session-new" onClick={() => createSession()}>
+          + New chat
+        </button>
+        {sessions.phase === 'ok' &&
+          sessions.data.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={
+                s.id === activeSessionId ? 'chat-session chat-session-active' : 'chat-session'
+              }
+              onClick={() => selectSession(s.id)}
+            >
+              <span className="chat-session-title">{s.title}</span>
+              <span
+                className="chat-session-delete"
+                role="button"
+                aria-label={`Delete ${s.title}`}
+                onClick={(e) => handleDelete(e, s.id)}
+              >
+                ×
+              </span>
+            </button>
+          ))}
+        {sessions.phase === 'error' && (
+          <span className="chat-error">Could not load chats: {sessions.message}</span>
+        )}
+      </div>
+
       <ul className="chat-messages">
         {messages.length === 0 && (
           <li className="chat-empty">Say hello to your LM Studio model.</li>
         )}
-        {messages.map((m, i) => (
-          <li key={i} className={`chat-message chat-message-${m.role}`}>
+        {messages.map((m) => (
+          <li key={m.id} className={`chat-message chat-message-${m.role}`}>
             <span className="chat-message-role">{m.role}</span>
             <p className="chat-message-content">{m.content}</p>
           </li>
@@ -44,9 +90,9 @@ export default function ChatPage() {
           placeholder="Type a message…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          disabled={state.phase === 'sending'}
+          disabled={busy}
         />
-        <button type="submit" disabled={state.phase === 'sending' || !input.trim()}>
+        <button type="submit" disabled={busy || !input.trim()}>
           Send
         </button>
       </form>
