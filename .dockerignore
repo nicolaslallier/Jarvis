@@ -1,0 +1,14 @@
+# Consolidated because backend/batch/ingest's Docker build context is now
+# the repo root (needed so their Dockerfiles can COPY shared/ — see
+# CLAUDE.md's "Shared package" section). Patterns are repo-root-relative.
+.git
+**/__pycache__
+**/*.pyc
+**/.venv
+.env
+backend/tests
+batch/tests
+shared/tests
+ingest/tests
+frontend/node_modules
+frontend/dist

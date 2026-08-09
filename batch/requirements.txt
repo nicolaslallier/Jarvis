@@ -1,9 +1,8 @@
+# sqlalchemy/asyncpg/greenlet/pydantic-settings/boto3 come transitively via
+# jarvis-shared (see shared/pyproject.toml), installed as a separate step in
+# batch/Dockerfile and via -e ../shared in requirements-dev.txt for local dev.
 apscheduler>=3.10,<4.0
-sqlalchemy>=2.0
-asyncpg
-greenlet
-pydantic-settings
-boto3
+docker
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-logging

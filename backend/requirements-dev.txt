@@ -1,3 +1,4 @@
+-e ../shared
 -r requirements.txt
 pytest
 pytest-asyncio

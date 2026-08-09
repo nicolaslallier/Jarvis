@@ -84,6 +84,7 @@ class FileRead(BaseModel):
     size: int
     folder_id: int | None
     created_at: datetime
+    ingested_at: datetime | None
 
 
 class FolderCreate(BaseModel):

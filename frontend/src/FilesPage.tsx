@@ -142,6 +142,9 @@ export default function FilesPage() {
               <div className="file-item-main">
                 <a href={downloadUrl(file.id)}>{file.filename}</a>
                 <span className="file-size">{formatSize(file.size)}</span>
+                <span className={`file-ingest-badge ${file.ingested_at ? 'is-indexed' : 'is-pending'}`}>
+                  {file.ingested_at ? 'Indexed' : 'Pending'}
+                </span>
               </div>
               <button type="button" onClick={() => handleDelete(file.id)} className="file-delete">
                 Delete

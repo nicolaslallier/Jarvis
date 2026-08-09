@@ -1,11 +1,9 @@
+# sqlalchemy/asyncpg/greenlet/pydantic-settings/boto3 come transitively via
+# jarvis-shared (see shared/pyproject.toml), installed as a separate step in
+# backend/Dockerfile and via -e ../shared in requirements-dev.txt for local dev.
 fastapi
 uvicorn[standard]
-sqlalchemy>=2.0
-asyncpg
-greenlet
-pydantic-settings
 httpx
-boto3
 python-multipart
 prometheus-fastapi-instrumentator
 opentelemetry-sdk

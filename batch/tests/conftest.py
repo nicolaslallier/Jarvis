@@ -22,6 +22,7 @@ class _FakeSettings:
     minio_bucket = "jarvis-test"
     batch_job_interval_minutes = 15
     batch_health_port = 0  # OS-assigned free port for tests
+    ingest_container_name = "jarvis-ingest-test"
 
 
 _monkey = MonkeyPatch()
