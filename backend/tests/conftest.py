@@ -5,6 +5,7 @@ patch it **before** importing ``app.main`` so the test suite can run without
 a real ``.env`` file or a live Postgres.
 """
 
+import asyncio
 from functools import cached_property
 
 import pytest
@@ -30,6 +31,7 @@ class _FakeSettings:
     minio_access_key = "test-access-key"
     minio_secret_key = "test-secret-key"
     minio_bucket = "jarvis-test"
+    rabbitmq_url = "amqp://guest:guest@rabbitmq.test:5672/"
 
 
 # Patch before any app import — fixtures don't run during module load.
@@ -41,6 +43,18 @@ from httpx import ASGITransport, AsyncClient
 
 from app.db import engine
 from app.main import app, lifespan
+
+
+async def _fake_consume(rabbitmq_url, queue_name, handler) -> None:
+    """Stand-in for jarvis_shared.queue.consume — blocks (like the real
+    consumer would) without touching a real broker, until cancelled on
+    lifespan shutdown."""
+    await asyncio.Event().wait()
+
+
+# The lifespan starts a background RabbitMQ consumer task; tests never have
+# a live broker, so replace it with a no-op that just blocks until cancelled.
+_monkey.setattr("app.main.consume", _fake_consume)
 
 
 def teardown_module() -> None:

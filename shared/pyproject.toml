@@ -15,6 +15,7 @@ dependencies = [
     "boto3",
     "pgvector",
     "alembic",
+    "aio-pika",
 ]
 
 [tool.hatch.build.targets.wheel]

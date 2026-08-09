@@ -23,6 +23,7 @@ class _FakeSettings:
     batch_job_interval_minutes = 15
     batch_health_port = 0  # OS-assigned free port for tests
     ingest_container_name = "jarvis-ingest-test"
+    rabbitmq_url = "amqp://guest:guest@rabbitmq.test:5672/"
 
 
 _monkey = MonkeyPatch()

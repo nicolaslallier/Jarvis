@@ -7,6 +7,7 @@ def test_defaults():
     assert settings.otel_exporter_otlp_endpoint == ""
     assert settings.minio_endpoint == "http://minio:9000"
     assert settings.minio_bucket == "jarvis"
+    assert settings.rabbitmq_url == "amqp://guest:guest@rabbitmq:5672/"
 
 
 def test_sqlalchemy_url_normalizes_postgres_scheme():

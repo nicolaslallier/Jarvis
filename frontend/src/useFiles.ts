@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export type StoredFile = {
   id: number
@@ -43,8 +43,11 @@ function filesQuery(folderId: number | null): string {
 export function useFiles() {
   const [breadcrumb, setBreadcrumb] = useState<Crumb[]>([ROOT_CRUMB])
   const [state, setState] = useState<FilesState>({ phase: 'loading' })
+  const [queuedFileIds, setQueuedFileIds] = useState<Set<number>>(new Set())
 
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id
+  const currentFolderIdRef = useRef(currentFolderId)
+  currentFolderIdRef.current = currentFolderId
 
   async function load(folderId: number | null) {
     setState({ phase: 'loading' })
@@ -78,6 +81,35 @@ export function useFiles() {
     load(currentFolderId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFolderId])
+
+  // Live updates: the backend relays jarvis.ingest.completed messages from
+  // RabbitMQ over this socket whenever a batch-triggered ingest pass
+  // finishes, so the "Pending"/"Indexed" badges refresh without polling.
+  useEffect(() => {
+    let socket: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    function connect() {
+      const wsUrl = `${API_URL.replace(/^http/, 'ws')}/ws/ingest-status`
+      socket = new WebSocket(wsUrl)
+      socket.onmessage = () => {
+        setQueuedFileIds(new Set())
+        load(currentFolderIdRef.current)
+      }
+      socket.onclose = () => {
+        if (!cancelled) reconnectTimer = setTimeout(connect, 3000)
+      }
+    }
+    connect()
+
+    return () => {
+      cancelled = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      socket?.close()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function openFolder(folder: Folder): void {
     setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }])
@@ -151,6 +183,16 @@ export function useFiles() {
     return `${API_URL}/files/${id}/download`
   }
 
+  async function requestIngest(id: number): Promise<void> {
+    const res = await fetch(`${API_URL}/files/${id}/ingest`, { method: 'POST' })
+
+    if (!res.ok) {
+      throw new Error(await errorMessage(res))
+    }
+
+    setQueuedFileIds((prev) => new Set(prev).add(id))
+  }
+
   return {
     state,
     breadcrumb,
@@ -161,5 +203,7 @@ export function useFiles() {
     uploadFile,
     deleteFile,
     downloadUrl,
+    requestIngest,
+    queuedFileIds,
   }
 }

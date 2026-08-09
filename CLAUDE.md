@@ -10,9 +10,10 @@ The repo is split into one top-level directory per container, orchestrated centr
 
 `shared/jarvis_shared/` is an installable local package (`pip install ./shared` or `-e ../shared` for dev) holding the config/db/storage/model patterns that `backend`, `batch`, and `ingest` all need identically:
 
-- `jarvis_shared/config.py` — `SharedSettings`, a `pydantic-settings` base with the fields every container needs (`DATABASE_URL`, OTEL vars, `MINIO_*`). Each container's own `app/config.py` subclasses this and adds its own app-specific fields (see each section below) rather than importing it directly.
+- `jarvis_shared/config.py` — `SharedSettings`, a `pydantic-settings` base with the fields every container needs (`DATABASE_URL`, OTEL vars, `MINIO_*`, `RABBITMQ_URL`). Each container's own `app/config.py` subclasses this and adds its own app-specific fields (see each section below) rather than importing it directly.
 - `jarvis_shared/db.py` — the shared `Base` (`DeclarativeBase`), `make_engine()`/`make_session_factory()` factories, `check_connection()`. `make_engine(..., register_vector_codec=True)` registers pgvector's asyncpg codec on every connection — only `ingest` passes this, since turning it on unconditionally would make every container's DB connection depend on the `vector` Postgres extension existing.
 - `jarvis_shared/storage.py` — boto3/MinIO helpers (`get_s3_client`, `put_object`, `get_object`, `delete_object`, `count_objects`, `ensure_bucket`).
+- `jarvis_shared/queue.py` — `aio-pika` helpers (`publish_message`, `consume`) plus the `jarvis.ingest.requested`/`jarvis.ingest.completed` queue name constants, used by `backend` and `batch` for the on-demand ingest trigger (see "Ingestion" below).
 - `jarvis_shared/models.py` — all SQLAlchemy ORM models (`Item`, `Task`, `ChatSession`, `ChatMessageRecord`, `Folder`, `StoredFile`, `FileChunk`), bound to the shared `Base`.
 - `jarvis_shared/migrations/` — Alembic environment (see "Database" below).
 
@@ -24,14 +25,15 @@ This package exists because `batch`'s config/db/storage were **deliberately dupl
 
 A FastAPI backend lives in `backend/app/`:
 
-- `backend/app/main.py` — FastAPI app, CORS middleware, Prometheus `/metrics`, router registration, startup lifespan (runs `Base.metadata.create_all` for the pre-Alembic tables — see "Database" below).
+- `backend/app/main.py` — FastAPI app, CORS middleware, Prometheus `/metrics`, router registration, startup lifespan (runs `Base.metadata.create_all` for the pre-Alembic tables — see "Database" below — and starts a background task consuming `jarvis.ingest.completed` off RabbitMQ, relaying each message to `ws_manager.broadcast`).
 - `backend/app/telemetry.py` — OpenTelemetry setup (OTLP/HTTP traces + logging instrumentation); no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty.
 - `backend/app/config.py` — `Settings(SharedSettings)` adding backend-specific fields (`CORS_ORIGINS`, `LMSTUDIO_BASE_URL`/`LMSTUDIO_MODEL` for chat).
 - `backend/app/db.py` — thin wrapper around `jarvis_shared.db`'s factories; still exposes `Base`, `engine`, `get_db()`, `check_connection()` at the same import paths as before.
 - `backend/app/models.py` — re-exports the ORM models it needs from `jarvis_shared.models`.
 - `backend/app/schemas.py` — Pydantic request/response models.
-- `backend/app/routers/` — one `APIRouter` per resource (`health.py`, `items.py`, `tasks.py`, `chat.py`, `files.py`). `files.py` uses `jarvis_shared.storage` for all MinIO calls (no inline boto3 client of its own).
-- `backend/tests/` — pytest + `httpx` async test client against the ASGI app directly (no live server needed; settings are monkeypatched to an in-memory SQLite DB, so no live Postgres/MinIO is required either).
+- `backend/app/ws_manager.py` — a small `ConnectionManager` tracking active WebSocket clients and broadcasting JSON payloads to all of them; used by the ingest-completion relay above.
+- `backend/app/routers/` — one `APIRouter` per resource (`health.py`, `items.py`, `tasks.py`, `chat.py`, `files.py`, `ingest_status.py`). `files.py` uses `jarvis_shared.storage` for all MinIO calls (no inline boto3 client of its own) and exposes `POST /files/{id}/ingest`, which publishes a `jarvis.ingest.requested` message instead of touching Docker directly. `ingest_status.py` exposes the `GET /ws/ingest-status` WebSocket the frontend listens on.
+- `backend/tests/` — pytest + `httpx` async test client against the ASGI app directly (no live server needed; settings are monkeypatched to an in-memory SQLite DB, and the RabbitMQ consumer is monkeypatched to a no-op, so no live Postgres/MinIO/RabbitMQ is required either).
 
 ### Frontend (`frontend/`)
 
@@ -39,6 +41,7 @@ A React + Vite web portal lives in `frontend/`, currently a single page showing 
 
 - `frontend/src/useHealthPoll.ts` — polling hook (interval `fetch`, no external data-fetching library), types the `/health` response shape and distinguishes network errors from 503 responses.
 - `frontend/src/HealthStatus.tsx` — renders the polled status.
+- `frontend/src/useFiles.ts` — besides folder/file CRUD, opens a WebSocket to `GET /ws/ingest-status` (reconnects on close) and re-runs `load()` on every message, so ingest completion updates the file list without polling. `requestIngest(id)` calls `POST /files/{id}/ingest`; `FilesPage.tsx` renders an "Ingérer" button per pending file (disabled while queued, per `queuedFileIds`, until the next WS-triggered reload clears it).
 - `frontend/Dockerfile` — multi-stage build: `npm run build` then serves the static `dist/` via nginx. `VITE_API_URL` is a **build-time** arg (baked into the static bundle) since it's a browser-facing URL — it must point at the backend's published host port (e.g. `http://localhost:8000`), not an internal Docker network name.
 
 The dockerized frontend has no published host port — it's on `infra-net` and reached through the Infra repo's shared NGINX at `jarvis.famillelallier.net` (see `nginx/conf.d/jarvis.conf` there), not `localhost:5173`. `localhost:5173` is only for the undockerized `npm run dev` flow below.
@@ -47,15 +50,17 @@ The dockerized frontend has no published host port — it's on `infra-net` and r
 
 A long-running Python worker lives in `batch/app/`, with an internal cron (no system crontab, no external job broker):
 
-- `batch/app/main.py` — entrypoint. Starts telemetry, a stdlib health server, and an `AsyncIOScheduler` (APScheduler) that runs each registered job on its own interval, plus once immediately on startup. Waits on `SIGTERM`/`SIGINT` for graceful shutdown.
+- `batch/app/main.py` — entrypoint. Starts telemetry, a stdlib health server, an `AsyncIOScheduler` (APScheduler) that runs each registered job on its own interval (plus once immediately on startup), and a long-lived background task consuming `jarvis.ingest.requested` off RabbitMQ (see "Ingestion" below). Waits on `SIGTERM`/`SIGINT` for graceful shutdown, cancelling that consumer task alongside `scheduler.shutdown()`.
 - `batch/app/jobs/` — one module per job, registered in `batch/app/jobs/__init__.py`'s `registered_jobs()`:
   - `heartbeat.py` — pings Postgres, counts MinIO objects, logs the result. Skeleton example.
-  - `ingest_trigger.py` — checks Postgres for `StoredFile` rows with `ingested_at IS NULL`; if any exist, uses docker-py against `/var/run/docker.sock` to start the (normally stopped) `jarvis-ingest` container, skipping if it's already running. See "Ingestion" below.
+  - `ingest_trigger.py` — checks Postgres for `StoredFile` rows with `ingested_at IS NULL`; if any exist, starts the (normally stopped) `jarvis-ingest` container via `app/docker_ingest.py`, skipping if it's already running. This periodic poll is a fallback safety net alongside the RabbitMQ-driven trigger below — either path can start the same container.
+- `batch/app/docker_ingest.py` — docker-py helpers (`start_container`, `wait_container`) against `/var/run/docker.sock`, shared by `ingest_trigger.py` (poll path) and `ingest_consumer.py` (RabbitMQ path).
+- `batch/app/ingest_consumer.py` — handles `jarvis.ingest.requested` messages (published by `backend/app/routers/files.py`'s `POST /files/{id}/ingest`): starts `jarvis-ingest`, blocks on `wait_container` for its exit code, then publishes `jarvis.ingest.completed` so the backend can relay it to the browser. See "Ingestion" below.
 - `batch/app/healthserver.py` + `batch/app/health_state.py` — a minimal stdlib `GET /health` endpoint (no FastAPI/uvicorn) reporting whether the last job run succeeded; this is what Docker Compose's `healthcheck:` probes, since "the process is alive" alone doesn't prove the scheduler is actually ticking.
 - `batch/app/config.py`, `batch/app/db.py`, `batch/app/storage.py` — thin wrappers around `jarvis_shared` (see "Shared package" above); `batch/app/telemetry.py` stays independently duplicated (OTEL setup differs slightly per container).
-- `batch/tests/` — same fake-settings-monkeypatch pattern as `backend/tests/conftest.py`, so `make test-batch` needs no live Postgres/MinIO/Docker daemon.
+- `batch/tests/` — same fake-settings-monkeypatch pattern as `backend/tests/conftest.py`, so `make test-batch` needs no live Postgres/MinIO/Docker/RabbitMQ.
 
-No HTTP API surface besides `/health` — jobs that need to expose data should write to Postgres or MinIO for `backend`/`frontend` to read, not serve their own routes.
+No HTTP API surface besides `/health` — jobs that need to expose data should write to Postgres or MinIO for `backend`/`frontend` to read, not serve their own routes. The RabbitMQ consumer is the one exception to "no inbound surface": it's a message queue subscription, not an HTTP route.
 
 **Security note on `ingest_trigger`:** mounting `/var/run/docker.sock` into `batch` (see `docker-compose.yml`) grants it root-equivalent access to the Docker host — anything with that socket can start/stop/inspect *any* container on the host and create new ones with arbitrary mounts, not just `jarvis-ingest`. This is a materially larger blast radius than anything else in this repo. `batch`'s Dockerfile running as non-root (`appuser`) does **not** mitigate this — Docker daemon socket auth is all-or-nothing regardless of in-container UID. The `:ro` mount is best-effort hardening only (the socket's own API doesn't respect filesystem read-only semantics for its write operations). A `docker-socket-proxy` sidecar scoping this down to just `containers.start`/`get` on `jarvis-ingest` would close this gap but hasn't been built yet — a reasonable follow-up, not yet done.
 
@@ -73,6 +78,10 @@ A normally-stopped, one-shot Python container that does the actual RAG file-inge
 **Text extraction scope:** only plainly-text `content_type`s (`text/*`, `application/json`, `.md`/`.txt` fallback by extension) are actually chunked and embedded. Binary formats (PDF, DOCX, images) are skipped-but-stamped (`ingested_at` still gets set, so `ingest_trigger` doesn't loop forever retrying a file it can never process) — extracting text from those is a deliberately deferred follow-up.
 
 **Power-up mechanics:** `docker-compose.yml`'s `ingest` service has `restart: "no"` and a fixed `container_name: jarvis-ingest`. It runs once per start and exits, so between triggers it just sits "Exited" — there's no polling loop or idle process to manage.
+
+**On-demand trigger via RabbitMQ.** Besides `batch`'s periodic poll (above), a user can trigger ingestion for a specific file from the web portal: `FilesPage.tsx`'s "Ingérer" button calls `POST /files/{id}/ingest`, which publishes to the `jarvis.ingest.requested` queue (`backend/app/routers/files.py`). `batch/app/ingest_consumer.py` consumes that, starts `jarvis-ingest`, blocks on its exit via `docker-py`'s `container.wait()`, then publishes to `jarvis.ingest.completed`. `backend/app/main.py` consumes *that* queue in its own background task and relays each message over the `GET /ws/ingest-status` WebSocket, which `useFiles.ts` listens on to refresh the file list live. `ingest` itself is unaware of RabbitMQ — `batch` observes its completion externally via the Docker API, not a message `ingest` sends itself. Since `ingest`'s pipeline always processes *every* pending file in one pass, the completion message means "an ingest pass just finished," not "only this file changed" — the frontend reacts by reloading the whole list.
+
+RabbitMQ itself is **already provisioned in the Infra repo** (`rabbitmq:4-management`, on `infra-net`, reachable at `rabbitmq:5672`) — same "shared root credential, no per-app provisioning yet" situation as MinIO. `RABBITMQ_USER`/`RABBITMQ_PASSWORD` in this repo's `.env` must match `RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` in Infra's `.env`; no Infra-repo changes are needed to use this feature.
 
 ### Database: uses the Infra repo's Postgres
 
@@ -113,8 +122,9 @@ curl http://localhost:8000/docs
 open https://jarvis.famillelallier.net   # frontend portal, via Infra's NGINX
 docker compose exec batch wget -qO- http://localhost:8080/health
 
-# shared/backend/batch/ingest tests all mock settings/db/minio/docker/LM
-# Studio, so none of them need a live Postgres, MinIO, or Docker daemon —
+# shared/backend/batch/ingest tests all mock settings/db/minio/rabbitmq/
+# docker/LM Studio, so none of them need a live Postgres, MinIO, RabbitMQ,
+# or Docker daemon —
 # `make test` runs all four. Individually:
 cd shared  && pip install -r requirements-dev.txt && pytest
 cd backend && pip install -r requirements-dev.txt && pytest

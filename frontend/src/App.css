@@ -345,7 +345,14 @@
   text-align: left;
 }
 
-.file-delete {
+.file-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.file-delete,
+.file-ingest {
   font: inherit;
   padding: 6px 12px;
   border: 1px solid var(--border);
@@ -354,6 +361,11 @@
   color: var(--text-h);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.file-ingest:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .health-loading {

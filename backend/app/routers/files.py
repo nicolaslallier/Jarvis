@@ -1,10 +1,12 @@
 import asyncio
 import uuid
+from datetime import UTC, datetime
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from jarvis_shared import storage
+from jarvis_shared.queue import INGEST_REQUESTED_QUEUE, publish_message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,6 +154,21 @@ async def download_file(file_id: int, db: AsyncSession = Depends(get_db)) -> Res
         media_type=db_file.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{db_file.filename}"'},
     )
+
+
+@router.post("/files/{file_id}/ingest", status_code=202)
+async def request_ingest(file_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    db_file = await db.get(StoredFile, file_id)
+    if db_file is None:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    settings = get_settings()
+    await publish_message(
+        settings.rabbitmq_url,
+        INGEST_REQUESTED_QUEUE,
+        {"file_id": file_id, "requested_at": datetime.now(UTC).isoformat()},
+    )
+    return {"status": "queued", "file_id": file_id}
 
 
 @router.delete("/files/{file_id}", status_code=204)
