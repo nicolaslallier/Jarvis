@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chunking import chunk_text
 from app.config import Settings
 from app.embeddings import EmbeddingError, embed_chunks
-from app.image_description import ImageDescriptionError, describe_image
+from app.image_description import ImageDescriptionError, describe_image, describe_pdf_pages
+from app.pdf_render import PdfRenderError, render_pdf_pages_to_png
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,14 @@ async def process_file(session: AsyncSession, settings: Settings, file: StoredFi
             file.ingested_at = datetime.now(UTC)
             await session.commit()
             return True
+
+        if is_pdf(file.filename, file.content_type) and not text.strip():
+            try:
+                page_images = render_pdf_pages_to_png(raw, settings.pdf_ocr_max_pages)
+                text = await describe_pdf_pages(settings, file.filename, page_images)
+            except (PdfRenderError, ImageDescriptionError):
+                logger.exception("ingest: failed to OCR scanned pdf via vision model for file_id=%s", file.id)
+                return False
 
     chunks = chunk_text(
         text, chunk_size_chars=settings.chunk_size_chars, chunk_overlap_chars=settings.chunk_overlap_chars

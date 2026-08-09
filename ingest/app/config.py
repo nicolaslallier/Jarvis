@@ -27,6 +27,19 @@ class Settings(SharedSettings):
         "objects, people, setting, and any other identifying context."
     )
 
+    # extract_text() is always tried first for a PDF (see app/pipeline.py).
+    # Only when that comes back empty (a scanned page with no text layer) do
+    # we rasterize pages and fall back to the vision model above, using a
+    # transcription-focused prompt instead of vision_description_prompt.
+    # pdf_ocr_max_pages bounds how many pages get sent through the vision
+    # model per file, since that's one request per page.
+    pdf_ocr_prompt: str = (
+        "Transcribe all text visible on this scanned document page exactly "
+        "as it appears. If there is no legible text, briefly describe the "
+        "page's visual content instead."
+    )
+    pdf_ocr_max_pages: int = 20
+
     # Naive fixed-size character chunking (see app/chunking.py) — no
     # tokenizer, no sentence-awareness, deliberately minimal until retrieval
     # quality can actually be measured.
