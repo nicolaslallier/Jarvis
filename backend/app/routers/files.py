@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
+from aio_pika.exceptions import CONNECTION_EXCEPTIONS as AMQP_CONNECTION_EXCEPTIONS
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -163,11 +164,16 @@ async def request_ingest(file_id: int, db: AsyncSession = Depends(get_db)) -> di
         raise HTTPException(status_code=404, detail="file not found")
 
     settings = get_settings()
-    await publish_message(
-        settings.rabbitmq_url,
-        INGEST_REQUESTED_QUEUE,
-        {"file_id": file_id, "requested_at": datetime.now(UTC).isoformat()},
-    )
+    try:
+        await publish_message(
+            settings.rabbitmq_url,
+            INGEST_REQUESTED_QUEUE,
+            {"file_id": file_id, "requested_at": datetime.now(UTC).isoformat()},
+        )
+    except AMQP_CONNECTION_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Could not reach RabbitMQ at {settings.rabbitmq_url}: {exc}"
+        ) from exc
     return {"status": "queued", "file_id": file_id}
 
 

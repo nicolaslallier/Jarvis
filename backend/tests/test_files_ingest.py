@@ -57,6 +57,26 @@ async def test_request_ingest_publishes_and_returns_202(client):
 
 
 @pytest.mark.asyncio
+async def test_request_ingest_rabbitmq_unreachable_returns_502(client):
+    fake_client = _FakeS3Client()
+    with patch("jarvis_shared.storage.boto3.client", return_value=fake_client):
+        upload_response = await client.post(
+            "/files", files={"file": ("hello.txt", b"hello world", "text/plain")}
+        )
+    file_id = upload_response.json()["id"]
+
+    with patch(
+        "app.routers.files.publish_message",
+        new_callable=AsyncMock,
+        side_effect=ConnectionRefusedError("refused"),
+    ):
+        response = await client.post(f"/files/{file_id}/ingest")
+
+    assert response.status_code == 502
+    assert "RabbitMQ" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_request_ingest_not_found(client):
     with patch("app.routers.files.publish_message", new_callable=AsyncMock) as mock_publish:
         response = await client.post("/files/999999/ingest")
