@@ -28,6 +28,8 @@ A React + Vite web portal lives in `frontend/`, currently a single page showing 
 - `frontend/src/HealthStatus.tsx` — renders the polled status.
 - `frontend/Dockerfile` — multi-stage build: `npm run build` then serves the static `dist/` via nginx. `VITE_API_URL` is a **build-time** arg (baked into the static bundle) since it's a browser-facing URL — it must point at the backend's published host port (e.g. `http://localhost:8000`), not an internal Docker network name.
 
+The dockerized frontend has no published host port — it's on `infra-net` and reached through the Infra repo's shared NGINX at `jarvis.famillelallier.net` (see `nginx/conf.d/jarvis.conf` there), not `localhost:5173`. `localhost:5173` is only for the undockerized `npm run dev` flow below.
+
 ### Database: uses the Infra repo's Postgres
 
 This backend does **not** run its own Postgres. It connects to the Postgres instance managed in the sibling `Infra` repo (`/Users/nicolaslallier/Claude/Infra`), over an external Docker network called `infra-net`, at hostname `postgres:5432`.
@@ -51,7 +53,7 @@ docker compose up -d
 # sanity check
 curl http://localhost:8000/health
 curl http://localhost:8000/docs
-open http://localhost:5173   # frontend portal
+open https://jarvis.famillelallier.net   # frontend portal, via Infra's NGINX
 
 # backend tests (in-process ASGI client — no need to build this project's
 # Docker image, but DATABASE_URL must point at a reachable Postgres, e.g.
