@@ -10,6 +10,9 @@ services:
       APP_ENV: ${APP_ENV:-development}
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-google/gemma-4-26b-a4b-qat}
+      EMBEDDING_LMSTUDIO_BASE_URL: ${EMBEDDING_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234}
+      EMBEDDING_LMSTUDIO_MODEL: ${EMBEDDING_LMSTUDIO_MODEL:-text-embedding-nomic-embed-text-v1.5}
+      RAG_TOP_K: ${RAG_TOP_K:-4}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-jarvis-api}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
