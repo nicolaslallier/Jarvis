@@ -33,17 +33,40 @@ class TaskRead(BaseModel):
     created_at: datetime
 
 
-class ChatMessage(BaseModel):
+class ChatSessionCreate(BaseModel):
+    title: str | None = None
+
+
+class ChatSessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
     role: Literal["system", "user", "assistant"]
+    content: str
+    created_at: datetime
+
+
+class ChatSessionDetail(ChatSessionRead):
+    messages: list[ChatMessageRead]
+
+
+class ChatSendRequest(BaseModel):
     content: str
 
 
-class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
-
-
-class ChatResponse(BaseModel):
-    message: ChatMessage
+class ChatSendResponse(BaseModel):
+    session: ChatSessionRead
+    user_message: ChatMessageRead
+    assistant_message: ChatMessageRead
 
 
 class FileRead(BaseModel):

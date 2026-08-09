@@ -231,6 +231,55 @@
   text-align: left;
 }
 
+.chat-sessions {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+.chat-session-new,
+.chat-session {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+}
+
+.chat-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-session-active {
+  border-color: var(--text-h);
+  color: var(--text-h);
+}
+
+.chat-session-delete {
+  color: var(--text);
+  line-height: 1;
+}
+
+.chat-session-delete:hover {
+  color: #e74c3c;
+}
+
 .chat-messages {
   list-style: none;
   margin: 0 0 16px;
