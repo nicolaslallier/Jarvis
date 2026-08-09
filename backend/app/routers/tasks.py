@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
@@ -22,6 +22,21 @@ async def create_task(task: TaskCreate, db: AsyncSession = Depends(get_db)) -> T
 async def list_tasks(db: AsyncSession = Depends(get_db)) -> list[Task]:
     result = await db.execute(select(Task).order_by(Task.id))
     return list(result.scalars().all())
+
+
+@router.get("/tasks/count")
+async def task_count(db: AsyncSession = Depends(get_db)) -> dict:
+    """Return total, done, and active task counts in a single query."""
+    result = await db.execute(
+        select(
+            func.count(Task.id).label("total"),
+            func.sum(case((Task.done, 1), else_=0)).label("done"),
+        )
+    )
+    row = result.one()
+    total = row.total
+    done = row.done or 0
+    return {"total": total, "done": done, "active": total - done}
 
 
 @router.post("/tasks/{task_id}/complete", response_model=TaskRead)
