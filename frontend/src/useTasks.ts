@@ -99,5 +99,24 @@ export function useTasks() {
     )
   }
 
-  return { state, createTask, completeTask, deleteTask }
+  async function updateTask(id: number, input: NewTask): Promise<void> {
+    const res = await fetch(`${API_URL}/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+
+    if (!res.ok) {
+      throw new Error(await errorMessage(res))
+    }
+
+    const updated: Task = await res.json()
+    setState((prev) =>
+      prev.phase === 'ok'
+        ? { phase: 'ok', data: prev.data.map((t) => (t.id === updated.id ? updated : t)) }
+        : prev,
+    )
+  }
+
+  return { state, createTask, completeTask, deleteTask, updateTask }
 }

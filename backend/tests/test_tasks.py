@@ -74,3 +74,42 @@ async def test_delete_task_not_found(client):
     response = await client.delete("/tasks/999999")
     assert response.status_code == 404
     assert response.json()["detail"] == "task not found"
+
+
+@pytest.mark.asyncio
+async def test_update_task(client):
+    create_response = await client.post("/tasks", json={"title": "Original title"})
+    task_id = create_response.json()["id"]
+
+    response = await client.put(f"/tasks/{task_id}", json={"title": "Updated title"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Updated title"
+    assert body["description"] is None
+    assert body["done"] is False
+
+    list_response = await client.get("/tasks")
+    assert list_response.json()[0]["title"] == "Updated title"
+
+
+@pytest.mark.asyncio
+async def test_update_task_partial(client):
+    create_response = await client.post(
+        "/tasks",
+        json={"title": "Full task", "description": "Some desc", "due_date": "2026-12-31"},
+    )
+    task_id = create_response.json()["id"]
+
+    response = await client.put(f"/tasks/{task_id}", json={"title": "Changed title"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Changed title"
+    assert body["description"] == "Some desc"      # unchanged
+    assert body["due_date"] == "2026-12-31"          # unchanged
+
+
+@pytest.mark.asyncio
+async def test_update_task_not_found(client):
+    response = await client.put("/tasks/999999", json={"title": "Ghost"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task not found"

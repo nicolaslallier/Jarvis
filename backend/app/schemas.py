@@ -33,6 +33,12 @@ class TaskRead(BaseModel):
     created_at: datetime
 
 
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    due_date: date | None = None
+
+
 class ChatSessionCreate(BaseModel):
     title: str | None = None
 

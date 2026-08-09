@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.models import Task
-from app.schemas import TaskCreate, TaskRead
+from app.schemas import TaskCreate, TaskRead, TaskUpdate
 
 router = APIRouter()
 
@@ -57,3 +57,15 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db)) -> None:
         raise HTTPException(status_code=404, detail="task not found")
     await db.delete(db_task)
     await db.commit()
+
+
+@router.put("/tasks/{task_id}", response_model=TaskRead)
+async def update_task(task_id: int, task: TaskUpdate, db: AsyncSession = Depends(get_db)) -> Task:
+    db_task = await db.get(Task, task_id)
+    if db_task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    for field, value in task.model_dump(exclude_unset=True).items():
+        setattr(db_task, field, value)
+    await db.commit()
+    await db.refresh(db_task)
+    return db_task
