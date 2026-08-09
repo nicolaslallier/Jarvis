@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import HealthStatus from './HealthStatus'
 import SessionTimer from './SessionTimer'
+import TaskCountWidget from './TaskCountWidget'
 import TasksPage from './TasksPage'
 import ChatPage from './ChatPage'
 import FilesPage from './FilesPage'
@@ -30,6 +31,7 @@ function App() {
             <>
               <h1>Jarvis Portal</h1>
               <SessionTimer />
+              <TaskCountWidget />
               <HealthStatus />
             </>
           }
