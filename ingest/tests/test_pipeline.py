@@ -1,14 +1,16 @@
+from io import BytesIO
 from unittest.mock import patch
 
 import pytest
 from jarvis_shared.db import Base
 from jarvis_shared.models import FileChunk, StoredFile
+from pypdf import PdfWriter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings
 from app.embeddings import EmbeddingError
-from app.pipeline import run_pipeline
+from app.pipeline import extract_text, is_pdf, is_supported_text, run_pipeline
 
 
 class _FakeBody:
@@ -135,3 +137,73 @@ async def test_already_ingested_files_are_not_reprocessed(session):
 
     assert (succeeded, failed) == (0, 0)
     mock_get_object.assert_not_called()
+
+
+def _blank_pdf_bytes() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buf = BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def test_is_pdf_by_content_type():
+    assert is_pdf("doc.pdf", "application/pdf") is True
+    assert is_pdf("doc.pdf", "text/plain") is False
+
+
+def test_is_pdf_by_extension_when_content_type_missing():
+    assert is_pdf("doc.pdf", None) is True
+    assert is_pdf("doc.txt", None) is False
+
+
+def test_is_supported_text_includes_pdf():
+    assert is_supported_text("doc.pdf", "application/pdf") is True
+    assert is_supported_text("doc.pdf", None) is True
+
+
+def test_extract_text_falls_back_to_decode_for_plain_text():
+    assert extract_text("doc.txt", "text/plain", b"hello") == "hello"
+
+
+def test_extract_text_reads_pdf_pages():
+    assert extract_text("doc.pdf", "application/pdf", _blank_pdf_bytes()) == ""
+
+
+@pytest.mark.asyncio
+async def test_pdf_file_is_extracted_chunked_and_embedded(session):
+    file = await _add_file(session, object_key="k5", filename="doc.pdf", content_type="application/pdf")
+
+    async def fake_embed(settings, chunks):
+        return [[0.1, 0.2, 0.3] for _ in chunks]
+
+    with (
+        patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k5": _blank_pdf_bytes()})),
+        patch("app.pipeline.extract_text", return_value="a" * 30),
+        patch("app.pipeline.embed_chunks", side_effect=fake_embed),
+    ):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert len(result.scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_unparseable_pdf_is_skipped_but_stamped(session):
+    file = await _add_file(session, object_key="k6", filename="broken.pdf", content_type="application/pdf")
+
+    with patch("app.pipeline.storage.get_object", side_effect=_fake_get_object({"k6": b"not a real pdf"})):
+        succeeded, failed = await run_pipeline(session, _settings())
+
+    assert (succeeded, failed) == (1, 0)
+
+    await session.refresh(file)
+    assert file.ingested_at is not None
+
+    result = await session.execute(select(FileChunk).where(FileChunk.file_id == file.id))
+    assert result.scalars().all() == []
