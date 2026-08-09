@@ -24,6 +24,8 @@ class _FakeSettings:
 
     lmstudio_base_url = "http://lmstudio.test"
     lmstudio_model = "test-model"
+    otel_exporter_otlp_endpoint = ""
+    otel_service_name = "jarvis-api-test"
 
 
 # Patch before any app import — fixtures don't run during module load.

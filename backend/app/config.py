@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # compose file adds the Linux `host-gateway` mapping for portability).
     lmstudio_base_url: str = "http://host.docker.internal:1234"
     lmstudio_model: str = "google/gemma-4-26b-a4b-qat"
+    # Empty disables OTEL (local/pytest). In Compose: http://alloy:4318
+    otel_exporter_otlp_endpoint: str = ""
+    otel_service_name: str = "jarvis-api"
 
     @property
     def sqlalchemy_url(self) -> str:

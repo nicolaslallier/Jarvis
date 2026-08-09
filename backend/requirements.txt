@@ -5,3 +5,8 @@ asyncpg
 greenlet
 pydantic-settings
 httpx
+prometheus-fastapi-instrumentator
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-logging
