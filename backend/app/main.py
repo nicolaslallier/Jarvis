@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
 from app.routers import health, items, tasks
+from app.telemetry import setup_telemetry
 
 settings = get_settings()
 
@@ -42,6 +44,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_telemetry(
+    app,
+    endpoint=settings.otel_exporter_otlp_endpoint or None,
+    service_name=settings.otel_service_name,
+)
+
+Instrumentator(
+    should_group_status_codes=False,
+    excluded_handlers=["/metrics"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(health.router)
 app.include_router(items.router)

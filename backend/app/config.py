@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     database_url: str
     cors_origins: str = "*"
     app_env: str = "development"
+    # Empty disables OTEL (local/pytest). In Compose: http://alloy:4318
+    otel_exporter_otlp_endpoint: str = ""
+    otel_service_name: str = "jarvis-api"
 
     @property
     def sqlalchemy_url(self) -> str:

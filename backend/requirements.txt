@@ -4,3 +4,8 @@ sqlalchemy>=2.0
 asyncpg
 greenlet
 pydantic-settings
+prometheus-fastapi-instrumentator
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-logging
