@@ -11,6 +11,7 @@ const SECTIONS: { kind: SearchResultKind; label: string }[] = [
   { kind: 'appointment', label: 'Rendez-vous' },
   { kind: 'file_chunk', label: 'Fichiers' },
   { kind: 'memory', label: 'Mémoire' },
+  { kind: 'meeting_summary', label: 'Résumés de réunion' },
   { kind: 'chat_message', label: 'Chat' },
 ]
 

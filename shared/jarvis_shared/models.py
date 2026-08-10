@@ -283,3 +283,31 @@ class Bill(Base):
     # Task.status/Task.priority.
     recurrence: Mapped[str] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MeetingSummary(Base):
+    """A record of what was discussed/decided in a meeting that already
+    happened — distinct from Appointment, which models a *scheduled* event
+    (start/end time), not what came out of it. Embedding-backed like Memory/
+    FileChunk so it's retrievable via app/search_service.py's semantic
+    search leg; the backend engine doesn't register the pgvector codec (see
+    jarvis_shared/db.py), so backend code must read/write `embedding` via
+    raw SQL CAST(... AS vector), never the ORM, same as Memory/FileChunk.
+    """
+
+    __tablename__ = "meeting_summaries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    meeting_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    participants: Mapped[str | None] = mapped_column(String(1000), default=None)
+    content: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    # Optional link back to the calendar event this summary was taken for.
+    appointment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

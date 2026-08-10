@@ -9,7 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.models import Appointment, Bill, Contact, FileChunk, Habit, Memory, NotificationSent
+from app.models import Appointment, Bill, Contact, FileChunk, Habit, MeetingSummary, Memory, NotificationSent
 from app.routers import (
     bills,
     briefing,
@@ -21,6 +21,7 @@ from app.routers import (
     health,
     ingest_status,
     items,
+    meeting_summaries,
     memory,
     search,
     tasks,
@@ -49,6 +50,7 @@ _ALEMBIC_MANAGED_TABLE_NAMES = {
     NotificationSent.__tablename__,
     Habit.__tablename__,
     Bill.__tablename__,
+    MeetingSummary.__tablename__,
 }
 _CREATE_ALL_TABLES = [
     table for table in Base.metadata.tables.values() if table.name not in _ALEMBIC_MANAGED_TABLE_NAMES
@@ -117,4 +119,5 @@ app.include_router(briefing.router)
 app.include_router(habits.router)
 app.include_router(bills.router)
 app.include_router(contacts.router)
+app.include_router(meeting_summaries.router)
 app.include_router(search.router)

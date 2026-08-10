@@ -77,7 +77,14 @@ async def test_search_response_shape(client):
     assert len(body["results"]) >= 1
     for result in body["results"]:
         assert set(result.keys()) == {"kind", "id", "title", "snippet", "score"}
-        assert result["kind"] in ("task", "appointment", "file_chunk", "memory", "chat_message")
+        assert result["kind"] in (
+            "task",
+            "appointment",
+            "file_chunk",
+            "memory",
+            "chat_message",
+            "meeting_summary",
+        )
         assert isinstance(result["id"], int)
         assert isinstance(result["title"], str)
         assert isinstance(result["snippet"], str)
