@@ -1,28 +1,24 @@
 import { useHealthPoll } from './useHealthPoll'
 
+// Discreet nav-bar indicator (not a page section) — the detailed card this
+// used to render belongs to ops, not the homepage; see docs/plan-refonte-accueil.md.
 export default function HealthStatus() {
   const state = useHealthPoll()
-
-  if (state.phase === 'loading') {
-    return <p className="health-loading">Vérification de l'état du serveur…</p>
-  }
-
   const isOk = state.phase === 'ok'
+  const isLoading = state.phase === 'loading'
+
+  const label = isLoading
+    ? "Vérification de l'état du serveur…"
+    : isOk
+      ? `État : ok — base de données : ${state.data.database}`
+      : `État : erreur — ${state.message}`
 
   return (
-    <div className={`health-card ${isOk ? 'health-ok' : 'health-error'}`}>
-      <div className="health-indicator">
-        <span className="health-dot" />
-        <strong>{isOk ? 'État : ok' : 'État : erreur'}</strong>
-      </div>
-      {isOk ? (
-        <p>Base de données : {state.data.database}</p>
-      ) : (
-        <p>{state.message}</p>
-      )}
-      <p className="health-timestamp">
-        Dernière vérification : {state.lastChecked.toLocaleTimeString()}
-      </p>
-    </div>
+    <span
+      className={`health-pill ${isLoading ? 'health-pill-loading' : isOk ? 'health-pill-ok' : 'health-pill-error'}`}
+      title={label}
+    >
+      <span className="health-pill-dot" />
+    </span>
   )
 }

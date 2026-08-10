@@ -9,6 +9,7 @@ import SearchPage from './SearchPage'
 import HabitsPage from './HabitsPage'
 import ContactsPage from './ContactsPage'
 import BillsPage from './BillsPage'
+import HealthStatus from './HealthStatus'
 import './App.css'
 
 function App() {
@@ -45,6 +46,7 @@ function App() {
         <NavLink to="/memory" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Mémoire
         </NavLink>
+        <HealthStatus />
       </nav>
       <Routes>
         <Route path="/" element={<TodayPage />} />

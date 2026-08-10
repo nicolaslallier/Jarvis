@@ -9,7 +9,7 @@ function formatElapsed(ms: number): string {
 }
 
 export default function SessionTimer() {
-  const { elapsed, running, start, stop, reset } = useSessionTimer()
+  const { elapsed, running, start, stop } = useSessionTimer()
 
   return (
     <section className="session-timer">
@@ -22,11 +22,6 @@ export default function SessionTimer() {
         ) : (
           <button className="session-timer-btn" onClick={stop}>
             Arrêter
-          </button>
-        )}
-        {elapsed > 0 && (
-          <button className="session-timer-btn" onClick={reset}>
-            Réinitialiser
           </button>
         )}
       </div>

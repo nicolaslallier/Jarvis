@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import DailyBriefing from './DailyBriefing'
 import JournalNote from './JournalNote'
 import SessionTimer from './SessionTimer'
-import TaskCountWidget from './TaskCountWidget'
-import HealthStatus from './HealthStatus'
-import { useTasks } from './useTasks'
+import { useBriefing } from './useBriefing'
 import type { Task } from './useTasks'
 import type { Appointment } from './useCalendar'
 import { useHabits } from './useHabits'
@@ -15,29 +13,31 @@ import type { Habit } from './useHabits'
 // convention as HabitsPage.tsx/ContactsPage.tsx, since this page composes
 // several already-styled widgets plus a few new bits of its own.
 const STYLES = `
-.today-page { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem; }
-.today-top { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+.today-page { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 2rem; }
+.today-header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.75rem; }
 .today-section-title { margin: 0 0 0.5rem 0; }
 .today-capture-form { display: flex; gap: 0.5rem; }
 .today-capture-form input[type="text"] {
   flex: 1;
   padding: 0.6rem 0.9rem;
   border-radius: 6px;
-  border: 1px solid var(--border-color, #ccc);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
 }
 .today-capture-form button {
   padding: 0.6rem 1.1rem;
   border-radius: 6px;
   border: none;
-  background: #4f46e5;
+  background: var(--accent);
   color: #fff;
   cursor: pointer;
 }
 .today-capture-form button:disabled { opacity: 0.6; cursor: default; }
 .today-capture-status { margin: 0.4rem 0 0 0; font-size: 0.9rem; }
-.today-capture-status-sent { color: #16a34a; }
-.today-capture-status-error { color: #dc2626; }
-.today-tasks-list, .today-habits-list {
+.today-capture-status-sent { color: #2ecc71; }
+.today-capture-status-error { color: #e74c3c; }
+.today-habits-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -45,17 +45,14 @@ const STYLES = `
   flex-direction: column;
   gap: 0.4rem;
 }
-.today-task-item, .today-habit-item {
+.today-habit-item {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   padding: 0.5rem 0.75rem;
   border-radius: 8px;
-  border: 1px solid var(--border-color, #ddd);
+  border: 1px solid var(--border);
 }
-.today-task-item-overdue { border-color: #dc2626; }
-.today-task-title { flex: 1; }
-.today-task-due { font-size: 0.85rem; opacity: 0.75; }
 .today-empty { opacity: 0.7; font-size: 0.9rem; }
 .today-habit-name { flex: 1; }
 .today-review-list {
@@ -73,30 +70,37 @@ const STYLES = `
   gap: 0.6rem;
   padding: 0.5rem 0.75rem;
   border-radius: 8px;
-  border: 1px solid var(--border-color, #ddd);
+  border: 1px solid var(--border);
 }
 .today-review-kind {
   font-size: 0.75rem;
   padding: 0.15rem 0.45rem;
   border-radius: 4px;
-  background: rgba(79, 70, 229, 0.15);
-  color: #4f46e5;
+  background: var(--border);
+  color: var(--accent);
   white-space: nowrap;
 }
 .today-review-title { flex: 1; min-width: 8rem; }
 .today-review-when { font-size: 0.85rem; opacity: 0.75; }
 .today-review-actions { display: flex; gap: 0.4rem; }
-.today-review-confirm, .today-review-reject {
+.today-review-confirm {
   padding: 0.3rem 0.7rem;
   border-radius: 6px;
   border: none;
+  background: var(--accent);
   color: #fff;
   cursor: pointer;
 }
-.today-review-confirm { background: #16a34a; }
-.today-review-reject { background: #dc2626; }
+.today-review-reject {
+  padding: 0.3rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #e74c3c;
+  background: none;
+  color: #e74c3c;
+  cursor: pointer;
+}
 .today-review-confirm:disabled, .today-review-reject:disabled { opacity: 0.6; cursor: default; }
-.today-review-error { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #dc2626; }
+.today-review-error { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #e74c3c; }
 `
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -116,19 +120,6 @@ async function errorMessage(res: Response): Promise<string> {
   return body?.detail ?? `Le serveur a répondu ${res.status}`
 }
 
-function isDueTodayOrOverdue(task: Task): boolean {
-  if (!task.due_at || task.status === 'done' || task.status === 'cancelled') return false
-  const due = new Date(task.due_at)
-  const endOfToday = new Date()
-  endOfToday.setHours(23, 59, 59, 999)
-  return due.getTime() <= endOfToday.getTime()
-}
-
-function isOverdue(task: Task): boolean {
-  if (!task.due_at) return false
-  return new Date(task.due_at).getTime() < Date.now()
-}
-
 function isHabitDoneForWindow(habit: Habit): boolean {
   if (!habit.last_completed_at) return false
   const gapMs = Date.now() - new Date(habit.last_completed_at).getTime()
@@ -138,9 +129,8 @@ function isHabitDoneForWindow(habit: Habit): boolean {
   return gapMs <= windowMs
 }
 
-function formatDue(task: Task): string {
-  if (!task.due_at) return ''
-  return new Date(task.due_at).toLocaleString(undefined, {
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('fr-CA', {
     day: 'numeric',
     month: 'short',
     hour: 'numeric',
@@ -148,12 +138,11 @@ function formatDue(task: Task): string {
   })
 }
 
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
+function formatTodayLabel(): string {
+  return new Date().toLocaleDateString('fr-CA', {
+    weekday: 'long',
     day: 'numeric',
-    month: 'short',
-    hour: 'numeric',
-    minute: '2-digit',
+    month: 'long',
   })
 }
 
@@ -172,7 +161,7 @@ type ReviewItem =
   | { kind: 'appointment'; id: number; appointment: Appointment }
 
 export default function TodayPage() {
-  const { state: tasksState } = useTasks()
+  const { state: briefingState, reload: reloadBriefing } = useBriefing()
   const { state: habitsState, completeHabit } = useHabits()
 
   const [captureText, setCaptureText] = useState('')
@@ -188,51 +177,44 @@ export default function TodayPage() {
   const [reviewPendingKeys, setReviewPendingKeys] = useState<Set<string>>(new Set())
   const [reviewRowErrors, setReviewRowErrors] = useState<Record<string, string>>({})
 
-  useEffect(() => {
-    let cancelled = false
+  const loadReviews = useCallback(() => {
+    setReviewTasks({ phase: 'loading' })
+    setReviewAppointments({ phase: 'loading' })
 
-    async function loadReviewTasks() {
-      try {
-        const res = await fetch(`${API_URL}/tasks?status=pending_review`)
-        if (cancelled) return
+    fetch(`${API_URL}/tasks?status=pending_review`)
+      .then(async (res) => {
         if (res.ok) {
           setReviewTasks({ phase: 'ok', data: await res.json() })
         } else {
           setReviewTasks({ phase: 'error', message: await errorMessage(res) })
         }
-      } catch (err) {
-        if (cancelled) return
+      })
+      .catch((err) => {
         setReviewTasks({
           phase: 'error',
           message: `Erreur réseau : ${err instanceof Error ? err.message : String(err)}`,
         })
-      }
-    }
+      })
 
-    async function loadReviewAppointments() {
-      try {
-        const res = await fetch(`${API_URL}/calendar/appointments?pending_review=true`)
-        if (cancelled) return
+    fetch(`${API_URL}/calendar/appointments?pending_review=true`)
+      .then(async (res) => {
         if (res.ok) {
           setReviewAppointments({ phase: 'ok', data: await res.json() })
         } else {
           setReviewAppointments({ phase: 'error', message: await errorMessage(res) })
         }
-      } catch (err) {
-        if (cancelled) return
+      })
+      .catch((err) => {
         setReviewAppointments({
           phase: 'error',
           message: `Erreur réseau : ${err instanceof Error ? err.message : String(err)}`,
         })
-      }
-    }
-
-    loadReviewTasks()
-    loadReviewAppointments()
-    return () => {
-      cancelled = true
-    }
+      })
   }, [])
+
+  useEffect(() => {
+    loadReviews()
+  }, [loadReviews])
 
   const reviewItems: ReviewItem[] = useMemo(() => {
     const items: ReviewItem[] = []
@@ -319,11 +301,6 @@ export default function TodayPage() {
     })
   }
 
-  const dueOrOverdueTasks = useMemo(() => {
-    if (tasksState.phase !== 'ok') return []
-    return tasksState.data.filter(isDueTodayOrOverdue)
-  }, [tasksState])
-
   async function handleCaptureSubmit(e: FormEvent) {
     e.preventDefault()
     const content = captureText.trim()
@@ -359,21 +336,34 @@ export default function TodayPage() {
         })
         return
       }
+      const body = messageRes.body
 
-      // This is a capture box, not a chat window — drain the streaming
-      // response so the request completes (and any tool calls it triggers
-      // actually run) without rendering the reply inline.
-      const reader = messageRes.body.getReader()
-      while (true) {
-        const { done } = await reader.read()
-        if (done) break
-      }
-
+      // The user gets their confirmation the instant the send is accepted —
+      // waiting on the full LLM generation here is what made capture feel
+      // broken (see docs/plan-refonte-accueil.md, point 6).
       setCaptureText('')
       setCaptureStatus({ phase: 'sent' })
       setTimeout(() => {
         setCaptureStatus((current) => (current.phase === 'sent' ? { phase: 'idle' } : current))
       }, CAPTURE_FEEDBACK_MS)
+
+      // Still drain the stream in the background — the secretary's tool
+      // calls (creating a task/appointment, etc.) only run as it's
+      // consumed — then refresh whatever it may have created.
+      ;(async () => {
+        try {
+          const reader = body.getReader()
+          while (true) {
+            const { done } = await reader.read()
+            if (done) break
+          }
+        } catch {
+          // best-effort drain — a network hiccup here shouldn't surface an error
+        } finally {
+          reloadBriefing()
+          loadReviews()
+        }
+      })()
     } catch (err) {
       setCaptureStatus({
         phase: 'error',
@@ -399,15 +389,35 @@ export default function TodayPage() {
   return (
     <div className="today-page">
       <style>{STYLES}</style>
-      <h1>Aujourd'hui</h1>
 
-      <div className="today-top">
+      <div className="today-header">
+        <h1>Aujourd'hui — {formatTodayLabel()}</h1>
         <SessionTimer />
-        <TaskCountWidget />
-        <HealthStatus />
       </div>
 
-      <DailyBriefing />
+      <section>
+        <h2 className="today-section-title">Capture rapide</h2>
+        <form className="today-capture-form" onSubmit={handleCaptureSubmit}>
+          <input
+            type="text"
+            value={captureText}
+            onChange={(e) => setCaptureText(e.target.value)}
+            placeholder="Notez une tâche, un rendez-vous, une pensée…"
+            disabled={capturing}
+          />
+          <button type="submit" disabled={capturing || !captureText.trim()}>
+            {capturing ? 'Envoi…' : 'Envoyer'}
+          </button>
+        </form>
+        {captureStatus.phase === 'sent' && (
+          <p className="today-capture-status today-capture-status-sent">Envoyé ✓</p>
+        )}
+        {captureStatus.phase === 'error' && (
+          <p className="today-capture-status today-capture-status-error">{captureStatus.message}</p>
+        )}
+      </section>
+
+      <DailyBriefing state={briefingState} />
 
       {(reviewItems.length > 0 || reviewTasks.phase === 'loading' || reviewAppointments.phase === 'loading') && (
         <section>
@@ -476,38 +486,16 @@ export default function TodayPage() {
         </section>
       )}
 
-      <section>
-        <h2 className="today-section-title">Tâches du jour</h2>
-        {tasksState.phase === 'loading' && <p className="today-empty">Chargement des tâches…</p>}
-        {tasksState.phase === 'error' && <p className="today-empty">{tasksState.message}</p>}
-        {tasksState.phase === 'ok' && dueOrOverdueTasks.length === 0 && (
-          <p className="today-empty">Aucune tâche due aujourd'hui.</p>
-        )}
-        {tasksState.phase === 'ok' && dueOrOverdueTasks.length > 0 && (
-          <ul className="today-tasks-list">
-            {dueOrOverdueTasks.map((task) => (
-              <li
-                key={task.id}
-                className={
-                  isOverdue(task) ? 'today-task-item today-task-item-overdue' : 'today-task-item'
-                }
-              >
-                <span className="today-task-title">{task.title}</span>
-                <span className="today-task-due">{formatDue(task)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {habitsState.phase === 'error' && (
+        <section>
+          <h2 className="today-section-title">Habitudes du jour</h2>
+          <p className="today-empty">{habitsState.message}</p>
+        </section>
+      )}
 
-      <section>
-        <h2 className="today-section-title">Habitudes du jour</h2>
-        {habitsState.phase === 'loading' && <p className="today-empty">Chargement des habitudes…</p>}
-        {habitsState.phase === 'error' && <p className="today-empty">{habitsState.message}</p>}
-        {habitsState.phase === 'ok' && habitsState.data.length === 0 && (
-          <p className="today-empty">Aucune habitude pour l'instant.</p>
-        )}
-        {habitsState.phase === 'ok' && habitsState.data.length > 0 && (
+      {habitsState.phase === 'ok' && habitsState.data.length > 0 && (
+        <section>
+          <h2 className="today-section-title">Habitudes du jour</h2>
           <ul className="today-habits-list">
             {habitsState.data.map((habit) => {
               const done = isHabitDoneForWindow(habit)
@@ -525,30 +513,8 @@ export default function TodayPage() {
               )
             })}
           </ul>
-        )}
-      </section>
-
-      <section>
-        <h2 className="today-section-title">Capture rapide</h2>
-        <form className="today-capture-form" onSubmit={handleCaptureSubmit}>
-          <input
-            type="text"
-            value={captureText}
-            onChange={(e) => setCaptureText(e.target.value)}
-            placeholder="Notez une tâche, un rendez-vous, une pensée…"
-            disabled={capturing}
-          />
-          <button type="submit" disabled={capturing || !captureText.trim()}>
-            {capturing ? 'Envoi…' : 'Envoyer'}
-          </button>
-        </form>
-        {captureStatus.phase === 'sent' && (
-          <p className="today-capture-status today-capture-status-sent">Envoyé ✓</p>
-        )}
-        {captureStatus.phase === 'error' && (
-          <p className="today-capture-status today-capture-status-error">{captureStatus.message}</p>
-        )}
-      </section>
+        </section>
+      )}
 
       <section>
         <h2 className="today-section-title">Journal</h2>
