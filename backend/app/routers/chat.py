@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app import calendar_service, task_service
 from app.config import Settings, get_settings
 from app.db import async_session, get_db
+from app.embeddings import embed_text
 from app.memory import (
     EXTRACTION_SYSTEM_PROMPT,
     fetch_relevant_memories,
@@ -277,28 +278,6 @@ class _ToolsRejected(Exception):
 
     def __init__(self, body: str) -> None:
         self.body = body
-
-
-async def _embed_text(settings: Settings, query: str) -> list[float] | None:
-    """Best-effort: embeds `query` via LM Studio. Shared by RAG file-chunk
-    retrieval and memory retrieval below so a single incoming message only
-    costs one embeddings call for both lookups combined. Any failure (LM
-    Studio unreachable, bad response) just means no context gets added —
-    this must never be the reason a chat message fails to send.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=EMBEDDING_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{settings.embedding_lmstudio_base_url}/v1/embeddings",
-                json={"model": settings.embedding_lmstudio_model, "input": [query]},
-            )
-        if response.status_code != 200:
-            logger.warning("Embedding call returned %s", response.status_code)
-            return None
-        return response.json()["data"][0]["embedding"]
-    except Exception:
-        logger.warning("Embedding call failed", exc_info=True)
-        return None
 
 
 async def _build_rag_context(
@@ -880,7 +859,7 @@ async def send_message(
     if settings.chat_history_max_messages > 0:
         history = history[-settings.chat_history_max_messages :]
 
-    embedding = await _embed_text(settings, payload.content)
+    embedding = await embed_text(payload.content)
     memory_context = await _build_memory_context(db, settings, embedding)
     rag_context, rag_chunks = await _build_rag_context(db, settings, embedding)
     calendar_context = await _build_calendar_context(db, settings)

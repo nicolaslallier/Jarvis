@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import httpx
+from sqlalchemy import text
 
 from app.db import async_session
 from app.main import app
@@ -207,3 +208,48 @@ async def test_delete_memory_not_found_returns_404(client):
     response = await client.delete("/memories/999")
 
     assert response.status_code == 404
+
+
+# --- POST /memories (journal/quick-note) -----------------------------------
+
+
+async def test_create_journal_memory_stores_with_source_journal(client):
+    fake_client = _FakeEmbeddingClient(response=_embedding_response([0.3, 0.4]))
+    with patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
+        response = await client.post("/memories", json={"content": "Felt great after the run today."})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == "Felt great after the run today."
+    assert set(body.keys()) == {"id", "content", "created_at"}
+    assert fake_client.calls == [
+        (EMBED_URL, {"model": "test-embedding-model", "input": ["Felt great after the run today."]})
+    ]
+
+    async with async_session() as db:
+        result = await db.execute(
+            text("SELECT content, source FROM memories WHERE id = :id"),
+            {"id": body["id"]},
+        )
+        row = result.first()
+    assert row.content == "Felt great after the run today."
+    assert row.source == "journal"
+
+
+async def test_create_journal_memory_embedding_failure_returns_502(client):
+    fake_client = _FakeEmbeddingClient(response=_embedding_response([0.1], status_code=500))
+    with patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
+        response = await client.post("/memories", json={"content": "unreachable LM Studio"})
+
+    assert response.status_code == 502
+
+    listed = (await client.get("/memories")).json()
+    assert listed == []
+
+
+async def test_create_journal_memory_embedding_network_error_returns_502(client):
+    fake_client = _FakeEmbeddingClient(error=httpx.ConnectError("connection refused"))
+    with patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
+        response = await client.post("/memories", json={"content": "unreachable LM Studio"})
+
+    assert response.status_code == 502

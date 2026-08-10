@@ -68,14 +68,19 @@ services:
       BATCH_JOB_INTERVAL_MINUTES: ${BATCH_JOB_INTERVAL_MINUTES:-15}
       INGEST_CONTAINER_NAME: ${INGEST_CONTAINER_NAME:-jarvis-ingest}
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
-    # Grants batch root-equivalent access to the Docker host (start/stop/
-    # inspect ANY container, create new ones with arbitrary mounts) so its
-    # ingest_trigger job can power the `ingest` container on and off — see
-    # CLAUDE.md's "Ingestion" section for the full security tradeoff. `:ro`
-    # is best-effort hardening only; the daemon socket's own API doesn't
-    # respect filesystem read-only semantics for its write operations.
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      DOCKER_PROXY_URL: ${DOCKER_PROXY_URL:-tcp://docker-socket-proxy:2375}
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_USERNAME: ${IMAP_USERNAME:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234}
+      LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-google/gemma-4-26b-a4b-qat}
+    extra_hosts:
+      # Same reasoning as the `api`/`ingest` services' extra_hosts: batch's
+      # email_ingest job now also calls LM Studio at host.docker.internal by
+      # default, which only resolves out of the box on Docker Desktop
+      # (Mac/Windows) — this mapping makes it also resolve on Linux hosts.
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
@@ -87,6 +92,23 @@ services:
       infra-net:
         aliases:
           - jarvis-batch
+      docker-proxy-net: {}
+
+  # Scopes batch's Docker access down from the raw daemon socket (root-
+  # equivalent) to just the CONTAINERS API resource — see CLAUDE.md's
+  # "Security note on ingest_trigger" for what that grants/doesn't grant.
+  # Only reachable from `batch` via the isolated `docker-proxy-net` network
+  # below, not from `infra-net`.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy-net
 
   # Normally stopped ("Exited") — does one ingestion pass and exits.
   # batch's ingest_trigger job starts it (via the Docker socket) whenever
@@ -131,3 +153,7 @@ services:
 networks:
   infra-net:
     external: true
+  # Isolated bridge network shared only by `batch` and `docker-socket-proxy`
+  # so nothing else in the compose project (or on infra-net) can reach the
+  # proxy's Docker API surface.
+  docker-proxy-net: {}

@@ -1,23 +1,18 @@
 """Proactive reminders job: notifies the user via ntfy.sh about overdue
 tasks and tomorrow's appointments, once per scheduler tick.
 
-Dedup note: there is no DB table tracking "already notified" items (adding
-one would need a new Alembic migration, and migrations are owned by another
-agent working in parallel — see shared/jarvis_shared/migrations/). Instead
-we keep an in-memory module-level map of (kind, id) -> last-notified local
-date string, so the same task/appointment isn't re-notified again within the
-same local calendar day even though this job re-runs every
-`reminder_job_interval_minutes`. This resets on container restart (a stopped
-task/appointment can be re-notified the same day after a restart) — a rare,
-acceptable tradeoff for a homelab tool, not worth over-engineering further.
+Dedup is DB-backed via the `notifications_sent` table (see migration
+0009_notifications_sent.py / jarvis_shared.models.NotificationSent), so a
+task/appointment already notified about today stays suppressed across
+container restarts — unlike the previous in-memory map this replaced.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from jarvis_shared.models import Appointment, Task
-from sqlalchemy import select
+from jarvis_shared.models import Appointment, NotificationSent, Task
+from sqlalchemy import select, text
 
 from app.config import get_settings
 from app.db import async_session
@@ -28,8 +23,15 @@ logger = logging.getLogger(__name__)
 
 _OPEN_STATUSES = ("todo", "doing")
 
-# (kind, id) -> ISO date string (local) this item was last notified on.
-_last_notified: dict[tuple[str, int], str] = {}
+# Portable across the Postgres this job runs against in production and the
+# SQLite the test suite uses (both support the same UPSERT syntax as long as
+# the conflict target matches a real unique index/constraint, which
+# uq_notifications_sent_kind_entity_id_date does).
+_MARK_NOTIFIED_SQL = text(
+    "INSERT INTO notifications_sent (kind, entity_id, notified_date) "
+    "VALUES (:kind, :entity_id, :notified_date) "
+    "ON CONFLICT (kind, entity_id, notified_date) DO NOTHING"
+)
 
 
 async def _fetch_overdue_tasks(now_utc: datetime) -> list[Task]:
@@ -60,19 +62,31 @@ def _tomorrow_window(now_local: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _filter_unnotified(items: list, kind: str, today_str: str) -> list:
-    fresh = []
-    for item in items:
-        key = (kind, item.id)
-        if _last_notified.get(key) == today_str:
-            continue
-        fresh.append(item)
-    return fresh
+async def _filter_unnotified(session, items: list, kind: str, today: date) -> list:
+    """Drops any item already recorded in notifications_sent for (kind,
+    item.id, today). Uses an IN clause (via the ORM query builder) rather
+    than Postgres's ANY(:ids) so the same code path works against the
+    SQLite the test suite runs on, not just the Postgres this job runs
+    against in production."""
+    if not items:
+        return []
+    ids = [item.id for item in items]
+    result = await session.execute(
+        select(NotificationSent.entity_id).where(
+            NotificationSent.kind == kind,
+            NotificationSent.notified_date == today,
+            NotificationSent.entity_id.in_(ids),
+        )
+    )
+    notified_ids = {row[0] for row in result}
+    return [item for item in items if item.id not in notified_ids]
 
 
-def _mark_notified(items: list, kind: str, today_str: str) -> None:
+async def _mark_notified(session, items: list, kind: str, today: date) -> None:
     for item in items:
-        _last_notified[(kind, item.id)] = today_str
+        await session.execute(
+            _MARK_NOTIFIED_SQL, {"kind": kind, "entity_id": item.id, "notified_date": today}
+        )
 
 
 def _format_message(overdue_tasks: list[Task], tomorrow_appts: list[Appointment]) -> str:
@@ -95,7 +109,7 @@ async def run() -> None:
     settings = get_settings()
     tz = ZoneInfo(settings.timezone)
     now_local = datetime.now(tz)
-    today_str = now_local.date().isoformat()
+    today = now_local.date()
 
     try:
         now_utc = now_local.astimezone(timezone.utc)
@@ -108,8 +122,14 @@ async def run() -> None:
         state.record("error")
         return
 
-    overdue_tasks = _filter_unnotified(overdue_tasks, "task", today_str)
-    tomorrow_appts = _filter_unnotified(tomorrow_appts, "appointment", today_str)
+    try:
+        async with async_session() as session:
+            overdue_tasks = await _filter_unnotified(session, overdue_tasks, "task", today)
+            tomorrow_appts = await _filter_unnotified(session, tomorrow_appts, "appointment", today)
+    except Exception:
+        logger.exception("reminders: failed to query notifications_sent for dedup")
+        state.record("error")
+        return
 
     if not overdue_tasks and not tomorrow_appts:
         logger.info("reminders: nothing new to notify")
@@ -127,8 +147,17 @@ async def run() -> None:
         state.record("error")
         return
 
-    _mark_notified(overdue_tasks, "task", today_str)
-    _mark_notified(tomorrow_appts, "appointment", today_str)
+    try:
+        async with async_session() as session:
+            await _mark_notified(session, overdue_tasks, "task", today)
+            await _mark_notified(session, tomorrow_appts, "appointment", today)
+            await session.commit()
+    except Exception:
+        # The notification already went out successfully at this point, so
+        # this failure shouldn't be reported as the job failing overall —
+        # worst case, an unrecorded dedup row means the same item can be
+        # re-notified on the next tick, which is safe, just noisy.
+        logger.exception("reminders: failed to record notifications_sent after successful send")
 
     logger.info(
         "reminders: notified %d overdue task(s), %d tomorrow appointment(s)",

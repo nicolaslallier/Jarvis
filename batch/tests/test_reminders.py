@@ -7,6 +7,7 @@ import httpx
 import pytest
 from jarvis_shared.db import Base
 from jarvis_shared.models import Appointment, Task
+from sqlalchemy import select, text
 
 from app.db import async_session, engine
 from app.health_state import state
@@ -30,16 +31,6 @@ async def db():
         await conn.run_sync(Base.metadata.create_all)
     yield
     await engine.dispose()
-
-
-@pytest.fixture(autouse=True)
-def _reset_dedup_state():
-    # reminders._last_notified is module-level, in-memory dedup state (see
-    # its docstring) — clear it between tests so one test's notifications
-    # don't suppress another's.
-    reminders._last_notified.clear()
-    yield
-    reminders._last_notified.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -184,6 +175,41 @@ async def test_same_item_not_renotified_within_same_local_day(db):
         await reminders.run()
 
     mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dedup_persists_across_a_fresh_session_simulating_restart(db):
+    """The dedup this replaces was an in-memory module-level dict, which
+    reset on container restart — a same-day item could be re-notified right
+    after a restart. The DB-backed notifications_sent table must not have
+    that gap: a dedup row written by some earlier session (which has since
+    closed and gone out of scope, standing in for "a prior process instance
+    that already notified and then exited") must still suppress the
+    notification the very first time `run()` executes afterwards — nothing
+    in reminders.py itself needs to have run before for the dedup to hold."""
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    await _add_task("Rappel apres redemarrage", due_at=past, status="todo")
+
+    async with async_session() as session:
+        result = await session.execute(select(Task))
+        task = result.scalars().one()
+
+    today = datetime.now(_TZ).date()
+    async with async_session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO notifications_sent (kind, entity_id, notified_date) "
+                "VALUES (:kind, :entity_id, :notified_date)"
+            ),
+            {"kind": "task", "entity_id": task.id, "notified_date": today},
+        )
+        await session.commit()
+
+    with patch("httpx.AsyncClient.post", new=AsyncMock()) as mock_post:
+        await reminders.run()
+
+    mock_post.assert_not_called()
+    assert state.last_status == "ok"
 
 
 @pytest.mark.asyncio

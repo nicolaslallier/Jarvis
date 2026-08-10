@@ -4,6 +4,7 @@
 apscheduler>=3.10,<4.0
 docker
 httpx
+imap-tools
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-logging

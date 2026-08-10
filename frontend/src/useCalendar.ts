@@ -8,6 +8,9 @@ export type Appointment = {
   start_time: string
   end_time: string
   all_day: boolean
+  // True = a draft row from email_ingest awaiting confirmation — see
+  // TodayPage.tsx's "À vérifier" section.
+  pending_review: boolean
   created_at: string
   updated_at: string
 }

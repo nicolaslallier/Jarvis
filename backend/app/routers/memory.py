@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.memory import delete_memory, list_memories, update_memory_content
-from app.schemas import MemoryRead, MemoryUpdate
+from app.embeddings import embed_text
+from app.memory import delete_memory, list_memories, store_journal_memory, update_memory_content
+from app.schemas import MemoryCreate, MemoryCreateRead, MemoryRead, MemoryUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,14 @@ EMBEDDING_TIMEOUT_SECONDS = 30.0
 
 
 async def _embed_text(settings: Settings, content: str) -> list[float] | None:
-    """Embeds `content` via LM Studio — same ~10-line shape as
-    app/routers/chat.py's private _embed_text, replicated here rather than
-    imported since routers shouldn't reach into each other's internals.
-    Unlike chat.py's best-effort version, a None here is NOT swallowed by
-    the caller: PATCH /memories/{id} below turns it into a hard 502, since a
-    stale/wrong embedding after an edit is worse than failing the edit.
+    """Embeds `content` via LM Studio for PATCH /memories/{id} specifically
+    — kept as its own copy (rather than app/embeddings.py's shared
+    embed_text, used by POST /memories below) since this one still takes an
+    explicit `settings` rather than calling get_settings() internally.
+    Same best-effort-return-None-on-failure shape either way; a None here is
+    NOT swallowed by the caller: PATCH /memories/{id} below turns it into a
+    hard 502, since a stale/wrong embedding after an edit is worse than
+    failing the edit.
     """
     try:
         async with httpx.AsyncClient(timeout=EMBEDDING_TIMEOUT_SECONDS) as client:
@@ -49,6 +52,22 @@ async def _embed_text(settings: Settings, content: str) -> list[float] | None:
 @router.get("/memories", response_model=list[MemoryRead])
 async def get_memories(db: AsyncSession = Depends(get_db)) -> list:
     return await list_memories(db)
+
+
+@router.post("/memories", response_model=MemoryCreateRead)
+async def create_journal_memory(payload: MemoryCreate, db: AsyncSession = Depends(get_db)):
+    """Lets the user write a journal/quick-note directly, stored as a
+    Memory row (source='journal') so it's retrieved by chat like any other
+    memory. Unlike the best-effort retrieval/extraction embedding calls
+    elsewhere, this fails loudly (502) if LM Studio is unreachable — the
+    user explicitly asked to save this note right now, so silently
+    dropping it would be worse than telling them it failed.
+    """
+    embedding = await embed_text(payload.content)
+    if embedding is None:
+        raise HTTPException(status_code=502, detail="could not embed journal note")
+
+    return await store_journal_memory(db, payload.content, embedding)
 
 
 @router.patch("/memories/{memory_id}", response_model=MemoryRead)

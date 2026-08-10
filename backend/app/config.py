@@ -28,6 +28,15 @@ class Settings(SharedSettings):
     # per chat message.
     memory_top_k: int = 6
 
+    # How many file_chunks / memories the global search feature (see
+    # app/search_service.py, GET /search) returns per kind. Deliberately
+    # separate from RAG_TOP_K/MEMORY_TOP_K above: those tune how much gets
+    # silently folded into a chat context window, while these tune how many
+    # results a user browsing search results actually sees — search wants
+    # more results than a single chat turn's context injection does.
+    search_chunk_top_k: int = 10
+    search_memory_top_k: int = 10
+
     # IANA timezone name used to ground the model's "current date/time"
     # context (see app/routers/chat.py's _build_datetime_context) in local
     # time instead of UTC, so relative expressions like "tomorrow" or

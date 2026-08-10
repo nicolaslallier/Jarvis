@@ -111,6 +111,61 @@ async def test_update_appointment_partial(client):
 
 
 @pytest.mark.asyncio
+async def test_appointment_pending_review_default_and_filter(client):
+    confirmed = await client.post(
+        "/calendar/appointments",
+        json={
+            "title": "Manual",
+            "start_time": "2026-09-01T10:00:00+00:00",
+            "end_time": "2026-09-01T11:00:00+00:00",
+        },
+    )
+    assert confirmed.json()["pending_review"] is False
+
+    # Nothing creates draft appointments through this endpoint (that's
+    # email_ingest's job, via direct ORM inserts in batch/), so exercise the
+    # filter with a manually-flipped row instead of a dedicated create path.
+    draft = await client.post(
+        "/calendar/appointments",
+        json={
+            "title": "Draft",
+            "start_time": "2026-09-02T10:00:00+00:00",
+            "end_time": "2026-09-02T11:00:00+00:00",
+        },
+    )
+    draft_id = draft.json()["id"]
+    await client.put(f"/calendar/appointments/{draft_id}", json={"pending_review": True})
+
+    response = await client.get("/calendar/appointments", params={"pending_review": "true"})
+    assert response.status_code == 200
+    body = response.json()
+    assert [a["id"] for a in body] == [draft_id]
+
+    response = await client.get("/calendar/appointments", params={"pending_review": "false"})
+    assert [a["id"] for a in response.json()] == [confirmed.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_confirm_pending_review_appointment(client):
+    create_response = await client.post(
+        "/calendar/appointments",
+        json={
+            "title": "Draft",
+            "start_time": "2026-09-01T10:00:00+00:00",
+            "end_time": "2026-09-01T11:00:00+00:00",
+        },
+    )
+    appointment_id = create_response.json()["id"]
+    await client.put(f"/calendar/appointments/{appointment_id}", json={"pending_review": True})
+
+    response = await client.put(
+        f"/calendar/appointments/{appointment_id}", json={"pending_review": False}
+    )
+    assert response.status_code == 200
+    assert response.json()["pending_review"] is False
+
+
+@pytest.mark.asyncio
 async def test_update_appointment_not_found(client):
     response = await client.put("/calendar/appointments/999999", json={"title": "Ghost"})
     assert response.status_code == 404

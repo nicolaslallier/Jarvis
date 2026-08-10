@@ -20,9 +20,12 @@ async def create_appointment(
 
 @router.get("/calendar/appointments", response_model=list[AppointmentRead])
 async def list_appointments(
-    start: datetime | None = None, end: datetime | None = None, db: AsyncSession = Depends(get_db)
+    start: datetime | None = None,
+    end: datetime | None = None,
+    pending_review: bool | None = None,
+    db: AsyncSession = Depends(get_db),
 ) -> list[Appointment]:
-    return await calendar_service.list_appointments(db, start=start, end=end)
+    return await calendar_service.list_appointments(db, start=start, end=end, pending_review=pending_review)
 
 
 @router.get("/calendar/appointments/{appointment_id}", response_model=AppointmentRead)
