@@ -9,7 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.models import Appointment, Contact, FileChunk, Memory
+from app.models import Appointment, Bill, Contact, FileChunk, Habit, Memory, NotificationSent
 from app.routers import (
     bills,
     briefing,
@@ -46,6 +46,9 @@ _ALEMBIC_MANAGED_TABLE_NAMES = {
     Memory.__tablename__,
     Appointment.__tablename__,
     Contact.__tablename__,
+    NotificationSent.__tablename__,
+    Habit.__tablename__,
+    Bill.__tablename__,
 }
 _CREATE_ALL_TABLES = [
     table for table in Base.metadata.tables.values() if table.name not in _ALEMBIC_MANAGED_TABLE_NAMES
