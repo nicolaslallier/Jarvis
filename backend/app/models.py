@@ -9,6 +9,7 @@ from jarvis_shared.models import (
     Habit,
     Item,
     Memory,
+    NotificationSent,
     StoredFile,
     Task,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "Habit",
     "Item",
     "Memory",
+    "NotificationSent",
     "StoredFile",
     "Task",
 ]
