@@ -1,6 +1,12 @@
 import { useState } from 'react'
 
-export type SearchResultKind = 'task' | 'appointment' | 'file_chunk' | 'memory' | 'chat_message'
+export type SearchResultKind =
+  | 'task'
+  | 'appointment'
+  | 'file_chunk'
+  | 'memory'
+  | 'chat_message'
+  | 'meeting_summary'
 
 export type SearchResult = {
   kind: SearchResultKind

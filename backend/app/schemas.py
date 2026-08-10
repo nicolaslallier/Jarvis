@@ -198,7 +198,9 @@ class MemoryCreateRead(BaseModel):
     created_at: datetime
 
 
-SearchResultKind = Literal["task", "appointment", "file_chunk", "memory", "chat_message"]
+SearchResultKind = Literal[
+    "task", "appointment", "file_chunk", "memory", "chat_message", "meeting_summary"
+]
 
 
 class SearchResultRead(BaseModel):
@@ -327,6 +329,35 @@ class ContactUpdate(BaseModel):
     date_type: str | None = None
     recurring_yearly: bool | None = None
     reminder_lead_days: int | None = None
+
+
+class MeetingSummaryCreate(BaseModel):
+    title: str
+    meeting_date: datetime
+    content: str
+    participants: str | None = None
+    appointment_id: int | None = None
+
+
+class MeetingSummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    meeting_date: datetime
+    participants: str | None
+    content: str
+    appointment_id: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MeetingSummaryUpdate(BaseModel):
+    title: str | None = None
+    meeting_date: datetime | None = None
+    content: str | None = None
+    participants: str | None = None
+    appointment_id: int | None = None
 
 
 class FolderCreate(BaseModel):

@@ -31,6 +31,7 @@ class _FakeSettings:
     memory_top_k = 6
     search_chunk_top_k = 10
     search_memory_top_k = 10
+    search_meeting_summary_top_k = 10
     calendar_upcoming_days = 7
     timezone = "America/Toronto"
     chat_history_max_messages = 40

@@ -9,6 +9,7 @@ import SearchPage from './SearchPage'
 import HabitsPage from './HabitsPage'
 import ContactsPage from './ContactsPage'
 import BillsPage from './BillsPage'
+import MeetingSummariesPage from './MeetingSummariesPage'
 import HealthStatus from './HealthStatus'
 import './App.css'
 
@@ -46,6 +47,12 @@ function App() {
         <NavLink to="/memory" className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}>
           Mémoire
         </NavLink>
+        <NavLink
+          to="/meeting-summaries"
+          className={({ isActive }) => (isActive ? 'nav-link-active' : 'nav-link')}
+        >
+          Résumés de réunion
+        </NavLink>
         <HealthStatus />
       </nav>
       <Routes>
@@ -59,6 +66,7 @@ function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/memory" element={<MemoryPage />} />
+        <Route path="/meeting-summaries" element={<MeetingSummariesPage />} />
       </Routes>
     </main>
   )

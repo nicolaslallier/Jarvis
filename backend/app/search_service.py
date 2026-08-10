@@ -52,6 +52,7 @@ class SearchLimits:
     chat_message_limit: int = _DEFAULT_ILIKE_LIMIT
     chunk_top_k: int = 10
     memory_top_k: int = 10
+    meeting_summary_top_k: int = 10
 
 
 @dataclass
@@ -83,6 +84,15 @@ _MEMORY_SEARCH_SQL = text(
     """
     SELECT id, content, (embedding <=> CAST(:query_vector AS vector)) AS distance
     FROM memories
+    ORDER BY distance ASC
+    LIMIT :top_k
+    """
+)
+
+_MEETING_SUMMARY_SEARCH_SQL = text(
+    """
+    SELECT id, title, content, (embedding <=> CAST(:query_vector AS vector)) AS distance
+    FROM meeting_summaries
     ORDER BY distance ASC
     LIMIT :top_k
     """
@@ -181,6 +191,24 @@ async def _search_memories(db: AsyncSession, embedding: list[float], top_k: int)
     ]
 
 
+async def _search_meeting_summaries(
+    db: AsyncSession, embedding: list[float], top_k: int
+) -> list[SearchResult]:
+    result = await db.execute(
+        _MEETING_SUMMARY_SEARCH_SQL, {"query_vector": format_vector_literal(embedding), "top_k": top_k}
+    )
+    return [
+        SearchResult(
+            kind="meeting_summary",
+            id=row.id,
+            title=row.title,
+            snippet=_truncate(row.content, _SNIPPET_LENGTH),
+            score=float(row.distance),
+        )
+        for row in result
+    ]
+
+
 async def search(
     db: AsyncSession,
     embed_fn: EmbedFn,
@@ -188,15 +216,15 @@ async def search(
     limits: SearchLimits,
 ) -> list[SearchResult]:
     """Runs every lookup and returns one flat list, section order stable
-    (tasks, appointments, chat messages, file_chunks, memories) — the
-    caller (app/routers/search.py) groups by `kind` for display, not this
-    function.
+    (tasks, appointments, chat messages, file_chunks, memories, meeting
+    summaries) — the caller (app/routers/search.py) groups by `kind` for
+    display, not this function.
 
     The ILIKE-based legs (task/appointment/chat_message) always run. The
-    vector-based legs (file_chunk/memory) additionally need `embed_fn` to
-    produce an embedding for `query`; if it returns None (LM Studio
-    unreachable, bad response — see app/embeddings.py's embed_text) or
-    raises outright, those two legs are just skipped and every other leg's
+    vector-based legs (file_chunk/memory/meeting_summary) additionally need
+    `embed_fn` to produce an embedding for `query`; if it returns None (LM
+    Studio unreachable, bad response — see app/embeddings.py's embed_text)
+    or raises outright, those legs are just skipped and every other leg's
     results still come back — an embedding failure is never a reason the
     whole search fails.
     """
@@ -213,6 +241,7 @@ async def search(
     if embedding is not None:
         results += await _search_file_chunks(db, embedding, limits.chunk_top_k)
         results += await _search_memories(db, embedding, limits.memory_top_k)
+        results += await _search_meeting_summaries(db, embedding, limits.meeting_summary_top_k)
 
     return results
 

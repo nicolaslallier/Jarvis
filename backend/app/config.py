@@ -36,6 +36,7 @@ class Settings(SharedSettings):
     # more results than a single chat turn's context injection does.
     search_chunk_top_k: int = 10
     search_memory_top_k: int = 10
+    search_meeting_summary_top_k: int = 10
 
     # IANA timezone name used to ground the model's "current date/time"
     # context (see app/routers/chat.py's _build_datetime_context) in local

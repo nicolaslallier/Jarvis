@@ -24,6 +24,7 @@ async def get_search(
     limits = SearchLimits(
         chunk_top_k=settings.search_chunk_top_k,
         memory_top_k=settings.search_memory_top_k,
+        meeting_summary_top_k=settings.search_meeting_summary_top_k,
     )
     results = await search_with_defaults(db, q, limits)
     return SearchResponse(
