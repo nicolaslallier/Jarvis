@@ -4,38 +4,12 @@
   box-sizing: border-box;
   margin: 0;
   padding: 32px 24px;
-  text-align: center;
-}
-
-.task-count {
-  display: flex;
-  justify-content: center;
-  gap: 16px;
-  margin-bottom: 24px;
-  font-size: 14px;
-}
-
-.task-count-total {
-  color: var(--text-h);
-  font-weight: 600;
-}
-
-.task-count-active {
-  color: #e74c3c;
-}
-
-.task-count-done {
-  color: #2ecc71;
-}
-
-.task-count-loading {
-  color: var(--text);
-  font-size: 14px;
 }
 
 .nav {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
   gap: 16px;
   margin-bottom: 24px;
@@ -51,10 +25,6 @@
 .nav-link-active {
   color: var(--text-h);
   text-decoration: underline;
-}
-
-.tasks {
-  text-align: left;
 }
 
 .tasks-form {
@@ -324,10 +294,6 @@
   margin-top: 8px;
 }
 
-.files {
-  text-align: left;
-}
-
 .files-breadcrumb {
   margin-bottom: 16px;
   color: var(--text);
@@ -496,77 +462,54 @@
   opacity: 0.6;
 }
 
-.health-loading {
-  color: var(--text);
-}
-
-.health-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 20px 24px;
-  text-align: left;
-}
-
-.health-indicator {
-  display: flex;
+.health-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  color: var(--text-h);
+  cursor: default;
 }
 
-.health-dot {
-  width: 10px;
-  height: 10px;
+.health-pill-dot {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
+  background: var(--border);
 }
 
-.health-ok .health-dot {
+.health-pill-ok .health-pill-dot {
   background: #2ecc71;
 }
 
-.health-error .health-dot {
+.health-pill-error .health-pill-dot {
   background: #e74c3c;
 }
 
-.health-timestamp {
-  margin-top: 12px;
-  font-size: 14px;
-  color: var(--text);
-}
-
 .session-timer {
-  text-align: center;
-  margin-bottom: 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
 }
 
 .session-timer-display {
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-  font-size: 32px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-h);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
 .session-timer-controls {
   display: flex;
-  justify-content: center;
   gap: 8px;
-  margin-top: 8px;
 }
 
 .session-timer-btn {
   font: inherit;
-  padding: 6px 14px;
+  padding: 4px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
   color: var(--text-h);
   cursor: pointer;
-}
-
-.chat {
-  text-align: left;
 }
 
 .chat-sessions {
@@ -797,10 +740,6 @@
 .chat-form button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.calendar {
-  text-align: left;
 }
 
 .calendar-loading,
@@ -1045,15 +984,6 @@
 
 /* ---- Daily briefing (Home page) ---- */
 
-.briefing {
-  text-align: left;
-  margin-bottom: 24px;
-}
-
-.briefing-title {
-  margin: 0 0 12px;
-}
-
 .briefing-summary {
   color: var(--text-h);
   margin: 0 0 16px;
@@ -1125,10 +1055,6 @@
 }
 
 /* ---- Memory page ---- */
-
-.memory-page {
-  text-align: left;
-}
 
 .memory-loading,
 .memory-empty {
@@ -1359,10 +1285,6 @@
 }
 
 /* ---- Search page ---- */
-
-.search-page {
-  text-align: left;
-}
 
 .search-form {
   display: flex;

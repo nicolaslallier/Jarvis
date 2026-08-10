@@ -1,18 +1,16 @@
-import { useBriefing } from './useBriefing'
+import type { BriefingState } from './useBriefing'
 import type { Appointment } from './useCalendar'
 import type { Task } from './useTasks'
 
 function formatTime(a: Appointment): string {
   if (a.all_day) return 'Toute la journée'
-  return new Date(a.start_time).toLocaleTimeString(undefined, {
+  return new Date(a.start_time).toLocaleTimeString('fr-CA', {
     hour: 'numeric',
     minute: '2-digit',
   })
 }
 
-export default function DailyBriefing() {
-  const { state } = useBriefing()
-
+export default function DailyBriefing({ state }: { state: BriefingState }) {
   if (state.phase === 'loading') {
     return <p className="briefing-loading">Chargement...</p>
   }
@@ -25,8 +23,6 @@ export default function DailyBriefing() {
 
   return (
     <section className="briefing">
-      <h2 className="briefing-title">Aujourd'hui</h2>
-
       {summary && <p className="briefing-summary">{summary}</p>}
 
       {appointments.length > 0 && (
