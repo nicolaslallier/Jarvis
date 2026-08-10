@@ -36,14 +36,20 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Vite bakes this in at `npm run build` time — it must be a
+        # build arg, not a runtime `environment:` entry (which the
+        # already-built static JS bundle can never see).
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     env_file: .env
-    environment:
-      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     depends_on:
       - api
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost || exit 1"]
+      # 127.0.0.1, not localhost — inside this container localhost can
+      # resolve to ::1, and nginx here only binds the IPv4 wildcard,
+      # which turns the check into a false-positive "unhealthy".
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
