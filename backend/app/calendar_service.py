@@ -7,13 +7,18 @@ from app.models import Appointment
 
 
 async def list_appointments(
-    db: AsyncSession, start: datetime | None = None, end: datetime | None = None
+    db: AsyncSession,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    pending_review: bool | None = None,
 ) -> list[Appointment]:
     stmt = select(Appointment).order_by(Appointment.start_time)
     if start is not None:
         stmt = stmt.where(Appointment.end_time >= start)
     if end is not None:
         stmt = stmt.where(Appointment.start_time <= end)
+    if pending_review is not None:
+        stmt = stmt.where(Appointment.pending_review == pending_review)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 

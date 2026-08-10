@@ -1,7 +1,20 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from jarvis_shared.db import Base
@@ -23,7 +36,7 @@ class Item(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-TASK_STATUSES = ("todo", "doing", "done", "cancelled")
+TASK_STATUSES = ("todo", "doing", "done", "cancelled", "pending_review")
 TASK_PRIORITIES = ("low", "normal", "high")
 
 
@@ -34,6 +47,12 @@ class Task(Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(String(2000), default=None)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # "pending_review" (see 0011_task_source.py / backend/app/schemas.py's
+    # TaskStatus) marks a draft row awaiting user confirmation before it's
+    # treated as a real, trusted task — same status-flag convention as
+    # Appointment.pending_review, but modeled as a status value here rather
+    # than a separate boolean column since Task.status was already a free
+    # string with no DB enum (see 0006's docstring).
     status: Mapped[str] = mapped_column(String(20), default="todo")
     priority: Mapped[str] = mapped_column(String(10), default="normal")
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -47,6 +66,13 @@ class Task(Base):
         ForeignKey("appointments.id", ondelete="SET NULL"), default=None
     )
     file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"), default=None)
+    # NULL = created directly by the user through the app (every row before
+    # this column existed). batch/app/jobs/email_ingest.py sets
+    # "email_import" on draft tasks (status="pending_review") it extracts
+    # from unread emails — same source-tagging convention as
+    # Appointment.source (see migration 0010's docstring). See migration
+    # 0011_task_source.py.
+    source: Mapped[str | None] = mapped_column(String(50), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -141,6 +167,12 @@ class Memory(Base):
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="SET NULL"), default=None
     )
+    # NULL = extracted from a chat exchange by backend/app/memory.py's
+    # extraction path (every row today, since that's the only current
+    # writer). A future direct-journal-entry feature can set an explicit
+    # value (e.g. "journal") to distinguish facts the user wrote themselves
+    # from ones the chat model inferred. See migration 0010's docstring.
+    source: Mapped[str | None] = mapped_column(String(50), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -154,7 +186,100 @@ class Appointment(Base):
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     all_day: Mapped[bool] = mapped_column(default=False)
+    # NULL = created directly by the user through the app (every row today).
+    # A future email-ingestion feature will set this (e.g. "email_ingestion")
+    # on draft appointments it creates. See migration 0010's docstring.
+    source: Mapped[str | None] = mapped_column(String(50), default=None)
+    # True = a draft row (e.g. from the future email-ingestion feature above)
+    # awaiting user confirmation before it's treated as a real, trusted
+    # appointment. False for every appointment created through the existing
+    # manual flow, which needs no confirmation step.
+    pending_review: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class NotificationSent(Base):
+    """Dedupe log for reminder notifications: "have we already notified the
+    user about this thing today". `kind` identifies what *type* of thing
+    (e.g. "task_due", "appointment_reminder") and `entity_id` is that
+    thing's primary key in its own table — deliberately not a foreign key,
+    since `entity_id` points at a different table depending on `kind`
+    (a polymorphic association Postgres FKs can't express directly) and,
+    more importantly, because a task/appointment can legitimately be
+    deleted *after* being notified about — the notification already did its
+    job by then, and a dangling row here is harmless (nothing joins against
+    it besides the exact-match dedupe lookup below). That's simpler and
+    cheaper than building cross-table cascade-delete tracking for what is
+    purely an advisory log. See migration 0009's docstring for the full
+    reasoning.
+    """
+
+    __tablename__ = "notifications_sent"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "entity_id", "notified_date", name="uq_notifications_sent_kind_entity_id_date"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    entity_id: Mapped[int] = mapped_column(Integer)
+    notified_date: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Habit(Base):
+    __tablename__ = "habits"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    # Free string (e.g. "daily"/"weekly"), same convention as Task.status/
+    # Task.priority — no DB enum, validated at the Pydantic schema layer.
+    frequency: Mapped[str] = mapped_column(String(20))
+    streak_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Contact(Base):
+    """A contact and a single important date about them (birthday,
+    anniversary, renewal), deliberately kept as one table rather than a
+    normalized `contacts` + `contact_dates` split. Nothing in the current
+    feature set needs more than one date per contact; splitting now would
+    be premature normalization for a one-to-many relationship this app
+    doesn't yet exercise. See migration 0010's docstring.
+    """
+
+    __tablename__ = "contacts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    date: Mapped[date] = mapped_column(Date)
+    # Free string (e.g. "birthday"/"anniversary"/"renewal"), same
+    # no-DB-enum convention as Task.status/Task.priority.
+    date_type: Mapped[str] = mapped_column(String(20))
+    recurring_yearly: Mapped[bool] = mapped_column(default=True)
+    reminder_lead_days: Mapped[int] = mapped_column(Integer, default=7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Bill(Base):
+    """A recurring bill reminder. Deliberately no paid/status tracking in
+    this pass — see migration 0010's docstring for why that's a separate,
+    deferred design question (modeling per-cycle bill instances) rather
+    than an oversight here.
+    """
+
+    __tablename__ = "bills"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    due_day: Mapped[int] = mapped_column(Integer)
+    # Free string (e.g. "monthly"/"yearly"), same no-DB-enum convention as
+    # Task.status/Task.priority.
+    recurrence: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

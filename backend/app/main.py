@@ -9,8 +9,22 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.config import get_settings
 from app.db import Base, engine
-from app.models import Appointment, FileChunk, Memory
-from app.routers import briefing, calendar, chat, files, health, ingest_status, items, memory, tasks
+from app.models import Appointment, Contact, FileChunk, Memory
+from app.routers import (
+    bills,
+    briefing,
+    calendar,
+    chat,
+    contacts,
+    files,
+    habits,
+    health,
+    ingest_status,
+    items,
+    memory,
+    search,
+    tasks,
+)
 from app.telemetry import setup_telemetry
 from app.ws_manager import manager as ws_manager
 
@@ -27,7 +41,12 @@ STARTUP_DB_RETRY_DELAY_SECONDS = 1
 # would make startup fail (or silently diverge from what Alembic thinks the
 # schema is) on any database that hasn't run those migrations yet. See
 # CLAUDE.md's "Database" section.
-_ALEMBIC_MANAGED_TABLE_NAMES = {FileChunk.__tablename__, Memory.__tablename__, Appointment.__tablename__}
+_ALEMBIC_MANAGED_TABLE_NAMES = {
+    FileChunk.__tablename__,
+    Memory.__tablename__,
+    Appointment.__tablename__,
+    Contact.__tablename__,
+}
 _CREATE_ALL_TABLES = [
     table for table in Base.metadata.tables.values() if table.name not in _ALEMBIC_MANAGED_TABLE_NAMES
 ]
@@ -92,3 +111,7 @@ app.include_router(files.router)
 app.include_router(ingest_status.router)
 app.include_router(memory.router)
 app.include_router(briefing.router)
+app.include_router(habits.router)
+app.include_router(bills.router)
+app.include_router(contacts.router)
+app.include_router(search.router)

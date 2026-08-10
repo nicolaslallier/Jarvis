@@ -253,7 +253,7 @@ async def test_list_sessions_ordered_by_most_recently_active(client):
     second = (await client.post("/chat/sessions", json={"title": "Second"})).json()
 
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("hi")})
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         await client.post(f"/chat/sessions/{first['id']}/messages", json={"content": "hello"})
 
     response = await client.get("/chat/sessions")
@@ -291,7 +291,7 @@ async def test_send_message_persists_history_and_streams_reply(client):
     session = (await client.post("/chat/sessions", json={})).json()
 
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("Hi there")})
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
         )
@@ -321,11 +321,11 @@ async def test_send_message_sends_full_history_to_lmstudio(client):
     session = (await client.post("/chat/sessions", json={})).json()
 
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("first reply")})
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         await client.post(f"/chat/sessions/{session['id']}/messages", json={"content": "one"})
 
     fake_client2 = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("second reply")})
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client2):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client2), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client2):
         await client.post(f"/chat/sessions/{session['id']}/messages", json={"content": "two"})
 
     _, sent_json = fake_client2.stream_calls[0]
@@ -347,12 +347,12 @@ async def test_send_message_truncates_history_sent_to_model(client):
 
     for content, reply in [("one", "r1"), ("two", "r2")]:
         fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream(reply)})
-        with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+        with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
             await client.post(f"/chat/sessions/{session['id']}/messages", json={"content": content})
 
     fake_client3 = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("r3")})
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client3),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client3), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client3),
         patch("app.routers.chat.get_settings", return_value=_settings(chat_history_max_messages=2)),
     ):
         await client.post(f"/chat/sessions/{session['id']}/messages", json={"content": "three"})
@@ -375,7 +375,7 @@ async def test_send_message_unreachable_still_persists_user_message(client):
     fake_client = _FakeLMStudioClient(
         stream_responses={STREAM_URL: httpx.ConnectError("connection refused")}
     )
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
         )
@@ -401,7 +401,7 @@ async def test_send_message_upstream_error_status(client):
             ]
         }
     )
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
         )
@@ -431,7 +431,7 @@ async def test_send_message_injects_rag_context_from_matching_chunks(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=fake_chunks),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
@@ -487,7 +487,7 @@ async def test_send_message_emits_sources_event_from_matching_chunks(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=fake_chunks),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
@@ -525,7 +525,7 @@ async def test_send_message_omits_sources_event_when_no_chunks_found(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
@@ -548,7 +548,7 @@ async def test_send_message_skips_context_when_no_chunks_found(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
     ):
@@ -577,7 +577,7 @@ async def test_send_message_continues_when_rag_retrieval_fails(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch(
             "app.routers.chat.fetch_relevant_chunks",
             side_effect=Exception("vector extension missing"),
@@ -605,7 +605,7 @@ async def test_send_message_always_includes_secretary_persona(client):
     session = (await client.post("/chat/sessions", json={})).json()
 
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("hi")})
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages", json={"content": "hello"}
         )
@@ -628,7 +628,7 @@ async def test_send_message_grounds_model_in_current_local_datetime(client):
     frozen_utc_noon = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("hi")})
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.datetime") as mock_datetime,
     ):
         mock_datetime.now.return_value = frozen_utc_noon
@@ -659,7 +659,7 @@ async def test_send_message_injects_memory_context_from_matching_memories(client
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
         patch("app.routers.chat.fetch_relevant_memories", return_value=fake_memories),
     ):
@@ -687,7 +687,7 @@ async def test_send_message_continues_when_memory_retrieval_fails(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
         patch(
             "app.routers.chat.fetch_relevant_memories",
@@ -716,7 +716,7 @@ async def test_send_message_stores_extracted_memories(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
         patch(
@@ -753,7 +753,7 @@ async def test_send_message_skips_storing_when_no_facts_extracted(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.store_memories", new_callable=AsyncMock) as mock_store,
     ):
         response = await client.post(
@@ -775,7 +775,7 @@ async def test_send_message_continues_when_memory_extraction_fails(client):
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("hi there")})
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch(
             "app.routers.chat.parse_extracted_facts",
             side_effect=Exception("boom"),
@@ -803,7 +803,7 @@ async def test_send_message_generates_title_in_background(client):
         stream_responses={STREAM_URL: _content_stream("Sure, I'll remember that.")},
     )
 
-    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client):
+    with patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client):
         response = await client.post(
             f"/chat/sessions/{session['id']}/messages",
             json={"content": "Remember that my birthday is March 3rd"},
@@ -826,7 +826,7 @@ async def test_send_message_first_completion_call_offers_calendar_tools(client):
     fake_client = _FakeLMStudioClient(stream_responses={STREAM_URL: _content_stream("hi there")})
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
     ):
@@ -875,7 +875,7 @@ async def test_send_message_executes_calendar_tool_call(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
     ):
@@ -937,7 +937,7 @@ async def test_send_message_executes_task_tool_call(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
     ):
@@ -983,7 +983,7 @@ async def test_send_message_falls_back_when_tools_rejected(client):
     )
 
     with (
-        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client), patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
         patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
         patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
     ):

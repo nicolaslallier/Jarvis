@@ -29,6 +29,8 @@ class _FakeSettings:
     embedding_lmstudio_model = "test-embedding-model"
     rag_top_k = 4
     memory_top_k = 6
+    search_chunk_top_k = 10
+    search_memory_top_k = 10
     calendar_upcoming_days = 7
     timezone = "America/Toronto"
     chat_history_max_messages = 40

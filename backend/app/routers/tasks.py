@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import task_service
 from app.db import get_db
 from app.models import Task
-from app.schemas import TaskCreate, TaskRead, TaskUpdate
+from app.schemas import TaskCreate, TaskRead, TaskStatus, TaskUpdate
 
 router = APIRouter()
 
@@ -33,8 +34,13 @@ async def create_task(task: TaskCreate, db: AsyncSession = Depends(get_db)) -> T
 
 
 @router.get("/tasks", response_model=list[TaskRead])
-async def list_tasks(db: AsyncSession = Depends(get_db)) -> list[Task]:
-    result = await db.execute(select(Task).order_by(*_TASK_ORDER))
+async def list_tasks(
+    status: TaskStatus | None = None, db: AsyncSession = Depends(get_db)
+) -> list[Task]:
+    stmt = select(Task).order_by(*_TASK_ORDER)
+    if status is not None:
+        stmt = stmt.where(Task.status == status)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
@@ -54,13 +60,14 @@ async def task_count(db: AsyncSession = Depends(get_db)) -> dict:
 
 @router.post("/tasks/{task_id}/complete", response_model=TaskRead)
 async def complete_task(task_id: int, db: AsyncSession = Depends(get_db)) -> Task:
-    db_task = await db.get(Task, task_id)
+    # Delegates to task_service.complete_task (also used by chat.py's
+    # complete_task tool call) rather than duplicating the status/
+    # completed_at update here, since that's also where recurrence
+    # regeneration lives — a completed recurring task should spawn its next
+    # occurrence the same way regardless of which entry point completed it.
+    db_task = await task_service.complete_task(db, task_id)
     if db_task is None:
         raise HTTPException(status_code=404, detail="task not found")
-    db_task.status = "done"
-    db_task.completed_at = datetime.now(UTC)
-    await db.commit()
-    await db.refresh(db_task)
     return db_task
 
 

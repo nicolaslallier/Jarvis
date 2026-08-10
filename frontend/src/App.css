@@ -1242,6 +1242,61 @@
   margin-top: 8px;
 }
 
+/* ---- JournalNote: quick-note composer, embedded elsewhere (e.g. Today) ---- */
+
+.journal-note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.journal-note-textarea {
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+}
+
+.journal-note-textarea:focus {
+  outline: 2px solid var(--accent);
+}
+
+.journal-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.journal-note-actions button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.journal-note-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.journal-note-success {
+  color: #2ecc71;
+  font-size: 13px;
+}
+
+.journal-note-error {
+  color: #e74c3c;
+  font-size: 13px;
+}
+
 /* ---- Chat UX additions: session search, stop button, sources, copy ---- */
 
 .chat-session-search {
@@ -1304,5 +1359,88 @@
 }
 
 .chat-message-source-excerpt {
+  color: var(--text);
+}
+
+/* ---- Search page ---- */
+
+.search-page {
+  text-align: left;
+}
+
+.search-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.search-input {
+  flex: 1;
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.search-form button {
+  font: inherit;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.search-form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.search-error {
+  color: #e74c3c;
+}
+
+.search-empty {
+  color: var(--text);
+}
+
+.search-section {
+  margin-bottom: 20px;
+}
+
+.search-section-title {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.search-item-title {
+  margin: 0;
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.search-item-snippet {
+  margin: 4px 0 0;
   color: var(--text);
 }

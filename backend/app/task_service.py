@@ -4,6 +4,7 @@ from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Task
+from app.recurrence import parse_recurrence
 
 _OPEN_STATUSES = ("todo", "doing")
 # Same ordering as routers/tasks.py: open tasks first (soonest due date,
@@ -73,7 +74,32 @@ async def update_task(db: AsyncSession, task_id: int, **fields: object) -> Task 
 
 
 async def complete_task(db: AsyncSession, task_id: int) -> Task | None:
-    return await update_task(db, task_id, status="done")
+    task = await update_task(db, task_id, status="done")
+    if task is None:
+        return None
+    if task.recurrence_rule and task.due_at is not None:
+        # due_at is guaranteed non-None for any task with recurrence_rule set
+        # (see schemas.py's TaskCreate/TaskUpdate validation), but a task
+        # created before that validation existed — or via a path that
+        # bypasses the schema layer, like this same regeneration — could in
+        # principle still have one without the other; skip regeneration
+        # rather than crash on a rule with no anchor to compute from.
+        next_due = parse_recurrence(task.recurrence_rule).next_after(task.due_at)
+        next_occurrence = Task(
+            title=task.title,
+            description=task.description,
+            due_at=next_due,
+            status="todo",
+            priority=task.priority,
+            project=task.project,
+            tags=task.tags,
+            parent_id=task.id,
+            recurrence_rule=task.recurrence_rule,
+        )
+        db.add(next_occurrence)
+        await db.commit()
+        await db.refresh(task)
+    return task
 
 
 async def fetch_active(db: AsyncSession, limit: int = 20) -> list[Task]:

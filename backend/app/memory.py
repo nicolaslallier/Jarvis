@@ -70,6 +70,21 @@ _UPDATE_SQL = text(
 
 _DELETE_SQL = text("DELETE FROM memories WHERE id = :id")
 
+# Same raw-SQL CAST(... AS vector) pattern as _INSERT_SQL above, but for a
+# journal note the user wrote directly (source='journal', no session_id)
+# rather than a fact extracted from a chat exchange. Kept as its own
+# statement/function rather than overloading store_memories: that function's
+# signature (session_id + parallel facts/embeddings lists) is shaped for the
+# batch extraction path and always leaves source NULL, neither of which fits
+# a single journal entry with an explicit source.
+_INSERT_JOURNAL_SQL = text(
+    """
+    INSERT INTO memories (content, embedding, session_id, source)
+    VALUES (:content, CAST(:embedding AS vector), NULL, 'journal')
+    RETURNING id, content, created_at
+    """
+)
+
 EXTRACTION_SYSTEM_PROMPT = (
     "You extract durable facts worth remembering long-term about the user "
     "from a single chat exchange (their message and the assistant's reply "
@@ -142,6 +157,20 @@ async def store_memories(
             {"content": fact, "embedding": format_vector_literal(embedding), "session_id": session_id},
         )
     await db.commit()
+
+
+async def store_journal_memory(db: AsyncSession, content: str, embedding: list[float]):
+    """Inserts a user-written journal/quick-note as a Memory row
+    (source='journal') and returns the created row (id, content,
+    created_at) via RETURNING, so the router can hand it straight back in
+    the response without a second query."""
+    result = await db.execute(
+        _INSERT_JOURNAL_SQL,
+        {"content": content, "embedding": format_vector_literal(embedding)},
+    )
+    row = result.first()
+    await db.commit()
+    return row
 
 
 async def list_memories(db: AsyncSession, limit: int = 200):

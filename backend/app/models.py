@@ -1,9 +1,12 @@
 from jarvis_shared.models import (
     Appointment,
+    Bill,
     ChatMessageRecord,
     ChatSession,
+    Contact,
     FileChunk,
     Folder,
+    Habit,
     Item,
     Memory,
     StoredFile,
@@ -12,10 +15,13 @@ from jarvis_shared.models import (
 
 __all__ = [
     "Appointment",
+    "Bill",
     "ChatMessageRecord",
     "ChatSession",
+    "Contact",
     "FileChunk",
     "Folder",
+    "Habit",
     "Item",
     "Memory",
     "StoredFile",
