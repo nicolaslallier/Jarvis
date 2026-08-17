@@ -1097,3 +1097,98 @@ async def test_send_message_falls_back_when_tools_rejected(client):
     assert len(completion_calls) >= 2
     assert completion_calls[0][1]["tools"] == TOOLS
     assert "tools" not in completion_calls[1][1]
+
+
+def test_secretary_prompt_confirmation_guard_covers_notes():
+    """Regression test for the prompt gap where the "never confirm a
+    change unless the tool call actually succeeded" guard only mentioned
+    appointments/tasks, not Obsidian notes."""
+    assert "Never tell the user an appointment, task, or Obsidian note" in SECRETARY_SYSTEM_PROMPT
+    assert '"error" field' in SECRETARY_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_execute_obsidian_tool_call_null_dir_path_defaults_to_root():
+    """{"dir_path": null} (a common way models express "no value" for an
+    optional argument) must not crash — .get(key, default) only applies
+    the default when the key is absent, not when it's explicitly null."""
+    with patch("app.obsidian_service.list_notes", return_value=["a.md"]) as mock_list:
+        result = await chat_module._execute_obsidian_tool_call("list_notes", {"dir_path": None})
+    assert result == {"files": ["a.md"]}
+    mock_list.assert_awaited_once_with("")
+
+
+@pytest.mark.asyncio
+async def test_execute_obsidian_tool_call_null_context_length_defaults():
+    with patch("app.obsidian_service.search_notes", return_value=[]) as mock_search:
+        await chat_module._execute_obsidian_tool_call(
+            "search_notes", {"query": "dentist", "context_length": None}
+        )
+    mock_search.assert_awaited_once_with("dentist", context_length=100)
+
+
+@pytest.mark.asyncio
+async def test_run_tool_calls_executes_obsidian_calls_concurrently():
+    """Two independent Obsidian tool calls in one model turn should run
+    concurrently rather than serially — calendar/task tool calls can't (they
+    share a single, non-concurrency-safe AsyncSession), but Obsidian calls
+    touch no shared state, so they shouldn't pay a purely sequential latency
+    tax. Proven here by two artificially slow calls both starting before
+    either finishes, and the pair completing in well under 2x one call's
+    duration."""
+    order: list[str] = []
+
+    async def _slow_list_notes(dir_path: str = ""):
+        order.append(f"start:{dir_path}")
+        await asyncio.sleep(0.05)
+        order.append(f"end:{dir_path}")
+        return [dir_path]
+
+    calls = [
+        {"id": "1", "function": {"name": "list_notes", "arguments": json.dumps({"dir_path": "A"})}},
+        {"id": "2", "function": {"name": "list_notes", "arguments": json.dumps({"dir_path": "B"})}},
+    ]
+
+    loop = asyncio.get_event_loop()
+    with patch("app.obsidian_service.list_notes", side_effect=_slow_list_notes):
+        start = loop.time()
+        results = await chat_module._run_tool_calls(None, calls)
+        elapsed = loop.time() - start
+
+    assert elapsed < 0.09
+    assert results["1"] == {"files": ["A"]}
+    assert results["2"] == {"files": ["B"]}
+    assert order[0] == "start:A" and order[1] == "start:B", "both calls should start before either finishes"
+
+
+@pytest.mark.asyncio
+async def test_run_tool_calls_keeps_calendar_and_task_calls_sequential(client):
+    """Calendar/task tool calls share the request's AsyncSession, which
+    isn't safe for concurrent use — only the Obsidian half of a mixed batch
+    should run concurrently."""
+    session_row = (await client.post("/chat/sessions", json={})).json()
+    db = chat_module.async_session()
+    try:
+        calls = [
+            {
+                "id": "1",
+                "function": {
+                    "name": "create_task",
+                    "arguments": json.dumps({"title": f"Task for session {session_row['id']}"}),
+                },
+            },
+            {
+                "id": "2",
+                "function": {
+                    "name": "create_task",
+                    "arguments": json.dumps({"title": "Second task"}),
+                },
+            },
+        ]
+        results = await chat_module._run_tool_calls(db, calls)
+        await db.commit()
+    finally:
+        await db.close()
+
+    assert results["1"]["task"]["title"].startswith("Task for session")
+    assert results["2"]["task"]["title"] == "Second task"

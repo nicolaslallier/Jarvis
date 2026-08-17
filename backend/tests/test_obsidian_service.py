@@ -1,9 +1,9 @@
+import httpx
+import pytest
 from unittest.mock import patch
 
-import pytest
-
 from app import obsidian_service
-from app.obsidian_service import ObsidianNotConfigured, ObsidianRequestError
+from app.obsidian_service import ObsidianInvalidPath, ObsidianNotConfigured, ObsidianRequestError
 
 
 class _FakeResponse:
@@ -33,23 +33,11 @@ class _FakeObsidianClient:
     async def __aexit__(self, *exc_info) -> bool:
         return False
 
-    async def _call(self, method: str, url: str, **kwargs):
+    async def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
         if self._error is not None:
             raise self._error
         return self._response
-
-    async def get(self, url, **kwargs):
-        return await self._call("GET", url, **kwargs)
-
-    async def post(self, url, **kwargs):
-        return await self._call("POST", url, **kwargs)
-
-    async def put(self, url, **kwargs):
-        return await self._call("PUT", url, **kwargs)
-
-    async def delete(self, url, **kwargs):
-        return await self._call("DELETE", url, **kwargs)
 
 
 def _patched(fake_client):
@@ -92,6 +80,25 @@ async def test_read_note_missing_raises_request_error():
     fake_client = _FakeObsidianClient(_FakeResponse(404, text="not found"))
     with _patched(fake_client), pytest.raises(ObsidianRequestError):
         await obsidian_service.read_note("missing.md")
+
+
+@pytest.mark.asyncio
+async def test_read_note_path_with_hash_and_question_mark_is_percent_encoded():
+    """'#' and '?' are legal characters in an Obsidian filename, but httpx
+    parses an un-encoded '#'/'?' in a URL string as a fragment/query
+    delimiter — the request must percent-encode the path segment so the
+    full filename actually reaches the plugin."""
+    fake_client = _FakeObsidianClient(_FakeResponse(200, text="content"))
+    with _patched(fake_client):
+        await obsidian_service.read_note("Journal/Tag#standup?.md")
+    _, url, _ = fake_client.calls[0]
+    assert url == "http://obsidian.test:27123/vault/Journal/Tag%23standup%3F.md"
+    # Percent-encoding the '#'/'?' up front means httpx's own URL parser no
+    # longer sees them as a fragment/query delimiter — nothing gets dropped.
+    parsed = httpx.URL(url)
+    assert parsed.fragment == ""
+    assert parsed.query == b""
+    assert "Tag" in parsed.path and "standup" in parsed.path
 
 
 @pytest.mark.asyncio
@@ -160,3 +167,38 @@ async def test_non_2xx_raises_request_error():
     fake_client = _FakeObsidianClient(_FakeResponse(500, text="boom"))
     with _patched(fake_client), pytest.raises(ObsidianRequestError):
         await obsidian_service.write_note("x.md", "content")
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_wrapped_in_request_error():
+    """Obsidian's desktop app not running (the plugin's most likely
+    real-world failure mode) raises a raw httpx.ConnectError from the
+    client call — this must be wrapped into ObsidianRequestError, not
+    left to propagate as an undocumented exception type."""
+    fake_client = _FakeObsidianClient(error=httpx.ConnectError("Connection refused"))
+    with _patched(fake_client):
+        with pytest.raises(ObsidianRequestError):
+            await obsidian_service.read_note("note.md")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["../secret.md", "../../etc/passwd", "Journal/../../outside.md", ".."],
+)
+@pytest.mark.asyncio
+async def test_path_escaping_vault_root_is_rejected(path):
+    fake_client = _FakeObsidianClient(_FakeResponse(200, text="content"))
+    with _patched(fake_client), pytest.raises(ObsidianInvalidPath):
+        await obsidian_service.read_note(path)
+    assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_internal_dotdot_that_stays_inside_vault_is_allowed():
+    """"a/../b" never leaves the vault root even though it contains ".." —
+    only traversal that would resolve above the root should be rejected."""
+    fake_client = _FakeObsidianClient(_FakeResponse(200, text="content"))
+    with _patched(fake_client):
+        await obsidian_service.read_note("a/../b.md")
+    _, url, _ = fake_client.calls[0]
+    assert url == "http://obsidian.test:27123/vault/a/../b.md"

@@ -69,10 +69,11 @@ SECRETARY_SYSTEM_PROMPT = (
     "tools — you have no other way to change their tasks. When a request "
     "naturally breaks into several steps (e.g. \"organize Sunday dinner\"), "
     "create one parent task and add the steps as separate tasks with "
-    "parent_id set to the parent's id. Never tell the user an appointment "
-    "or task was added, changed, or completed unless you actually called "
-    "the matching tool in this turn and it returned success; if you didn't "
-    "call it, say so instead of confirming the change. You can search, "
+    "parent_id set to the parent's id. Never tell the user an appointment, "
+    "task, or Obsidian note was added, changed, saved, or deleted unless "
+    "you actually called the matching tool in this turn and its result did "
+    "not contain an \"error\" field; if you didn't call it, or it returned "
+    "an error, say so instead of confirming the change. You can search, "
     "read, create, update, and delete notes in the user's Obsidian vault "
     "only by calling the list_notes/search_notes/read_note/write_note/"
     "append_note/delete_note tools — you have no other way to access "
@@ -600,14 +601,10 @@ async def _execute_task_tool_call(db: AsyncSession, name: str, arguments: dict) 
 
 _TASK_TOOL_NAMES = {"list_tasks", "create_task", "update_task", "complete_task"}
 
-_OBSIDIAN_TOOL_NAMES = {
-    "list_notes",
-    "search_notes",
-    "read_note",
-    "write_note",
-    "append_note",
-    "delete_note",
-}
+# Derived from OBSIDIAN_TOOLS rather than hand-listed, so a future tool added
+# there can't be forgotten here and silently fall through to the calendar
+# executor's "unknown tool" fallback below.
+_OBSIDIAN_TOOL_NAMES = {tool["function"]["name"] for tool in OBSIDIAN_TOOLS}
 
 
 async def _execute_obsidian_tool_call(name: str, arguments: dict) -> dict:
@@ -618,11 +615,14 @@ async def _execute_obsidian_tool_call(name: str, arguments: dict) -> dict:
     than a 500."""
     try:
         if name == "list_notes":
-            files = await obsidian_service.list_notes(arguments.get("dir_path", ""))
+            # `.get(key, default)` only substitutes `default` when the key
+            # is absent — a model emitting `{"dir_path": null}` for "no
+            # value" would otherwise pass None through to list_notes().
+            files = await obsidian_service.list_notes(arguments.get("dir_path") or "")
             return {"files": files}
         if name == "search_notes":
             results = await obsidian_service.search_notes(
-                arguments["query"], context_length=arguments.get("context_length", 100)
+                arguments["query"], context_length=arguments.get("context_length") or 100
             )
             return {"results": results}
         if name == "read_note":
@@ -651,6 +651,38 @@ async def _execute_tool_call(db: AsyncSession, name: str, arguments: dict) -> di
     if name in _OBSIDIAN_TOOL_NAMES:
         return await _execute_obsidian_tool_call(name, arguments)
     return await _execute_calendar_tool_call(db, name, arguments)
+
+
+def _parse_tool_call_arguments(call: dict) -> dict:
+    try:
+        return json.loads(call.get("function", {}).get("arguments") or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+async def _run_tool_calls(db: AsyncSession, calls: list[dict]) -> dict[str, dict]:
+    """Executes one model turn's tool calls and returns their results keyed
+    by tool_call_id. Obsidian calls touch no shared state (each opens its
+    own httpx client, see app/obsidian_service.py) so they run concurrently;
+    calendar/task calls share `db`, a single SQLAlchemy AsyncSession that
+    isn't safe for concurrent use, so those stay sequential."""
+    is_obsidian = [c.get("function", {}).get("name") in _OBSIDIAN_TOOL_NAMES for c in calls]
+    concurrent_calls = [c for c, obsidian in zip(calls, is_obsidian) if obsidian]
+    sequential_calls = [c for c, obsidian in zip(calls, is_obsidian) if not obsidian]
+
+    async def _run(call: dict) -> tuple[str, dict]:
+        name = call.get("function", {}).get("name", "")
+        result = await _execute_tool_call(db, name, _parse_tool_call_arguments(call))
+        return call.get("id", ""), result
+
+    results: dict[str, dict] = {}
+    if concurrent_calls:
+        for call_id, result in await asyncio.gather(*(_run(c) for c in concurrent_calls)):
+            results[call_id] = result
+    for call in sequential_calls:
+        call_id, result = await _run(call)
+        results[call_id] = result
+    return results
 
 
 async def _stream_attempt(settings: Settings, messages: list[dict], tools: list[dict] | None):
@@ -931,18 +963,22 @@ async def _stream_send_message(
                 "content": final_content,
                 "tool_calls": final_tool_calls,
             }
-            tool_result_messages = []
+            # All tool_call SSE events go out up front (rather than
+            # interleaved with each result) so the client sees the full set
+            # immediately — _run_tool_calls below may run some of them
+            # concurrently, so there's no single "now executing" moment to
+            # interleave a per-call event with.
             for call in final_tool_calls:
-                function = call.get("function", {})
-                yield _sse({"type": "tool_call", "name": function.get("name", "")})
-                try:
-                    arguments = json.loads(function.get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-                result = await _execute_tool_call(db, function.get("name", ""), arguments)
-                tool_result_messages.append(
-                    {"role": "tool", "tool_call_id": call.get("id", ""), "content": json.dumps(result)}
-                )
+                yield _sse({"type": "tool_call", "name": call.get("function", {}).get("name", "")})
+            results_by_call_id = await _run_tool_calls(db, final_tool_calls)
+            tool_result_messages = [
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": json.dumps(results_by_call_id[call.get("id", "")]),
+                }
+                for call in final_tool_calls
+            ]
             messages = messages + [assistant_tool_message] + tool_result_messages
         else:
             # Exhausted MAX_TOOL_ITERATIONS and the model is still trying to
