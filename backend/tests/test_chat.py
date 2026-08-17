@@ -967,6 +967,101 @@ async def test_send_message_executes_task_tool_call(client):
 
 
 @pytest.mark.asyncio
+async def test_send_message_executes_obsidian_tool_call(client):
+    """A model reply containing a search_notes tool call round-trips
+    through app/obsidian_service.py (mocked here, exercised directly in
+    test_obsidian_service.py) and the result is fed back to the model."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "search_notes",
+                "arguments": json.dumps({"query": "dentist"}),
+            },
+        }
+    ]
+    fake_client = _FakeLMStudioClient(
+        stream_responses={
+            STREAM_URL: [
+                _tool_call_stream(tool_calls),
+                _content_stream("Found one note mentioning your dentist appointment."),
+            ]
+        }
+    )
+    search_results = [{"filename": "Journal/2026-08-17.md", "score": 1.2, "matches": []}]
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.obsidian_service.search_notes", return_value=search_results) as mock_search,
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "what did I write about the dentist?"},
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    tool_call_event = next(e for e in events if e["type"] == "tool_call")
+    assert tool_call_event["name"] == "search_notes"
+    done = next(e for e in events if e["type"] == "done")
+    assert done["assistant_message"]["content"] == "Found one note mentioning your dentist appointment."
+
+    mock_search.assert_awaited_once_with("dentist", context_length=100)
+
+    completion_calls = [c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")]
+    followup_payload = completion_calls[1][1]
+    tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
+    result = json.loads(tool_message["content"])
+    assert result["results"] == search_results
+
+
+@pytest.mark.asyncio
+async def test_send_message_obsidian_tool_call_not_configured_returns_error(client):
+    """If OBSIDIAN_API_KEY isn't set, the tool call still round-trips — the
+    model just sees a clear error in the tool result instead of a 500."""
+    session = (await client.post("/chat/sessions", json={})).json()
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "function": {"name": "read_note", "arguments": json.dumps({"path": "x.md"})},
+        }
+    ]
+    fake_client = _FakeLMStudioClient(
+        stream_responses={
+            STREAM_URL: [
+                _tool_call_stream(tool_calls),
+                _content_stream("Obsidian isn't set up yet."),
+            ]
+        }
+    )
+
+    with (
+        patch("app.routers.chat.httpx.AsyncClient", return_value=fake_client),
+        patch("app.embeddings.httpx.AsyncClient", return_value=fake_client),
+        patch("app.routers.chat.fetch_relevant_memories", return_value=[]),
+        patch("app.routers.chat.fetch_relevant_chunks", return_value=[]),
+        patch("app.obsidian_service.get_settings", return_value=SimpleNamespace(obsidian_api_key="")),
+    ):
+        response = await client.post(
+            f"/chat/sessions/{session['id']}/messages",
+            json={"content": "read my note x.md"},
+        )
+
+    assert response.status_code == 200
+    completion_calls = [c for c in fake_client.stream_calls if c[0].endswith("/v1/chat/completions")]
+    followup_payload = completion_calls[1][1]
+    tool_message = next(m for m in followup_payload["messages"] if m["role"] == "tool")
+    result = json.loads(tool_message["content"])
+    assert "not configured" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_send_message_falls_back_when_tools_rejected(client):
     """Not every LM Studio model/version supports tool calling — if the
     first (tools-enabled) streaming call fails outright, retry once without

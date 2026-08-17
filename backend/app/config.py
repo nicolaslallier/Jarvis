@@ -56,6 +56,20 @@ class Settings(SharedSettings):
     # fetch_upcoming, used by app/routers/chat.py).
     calendar_upcoming_days: int = 7
 
+    # Obsidian Local REST API plugin (coddingtonbear/obsidian-local-rest-api),
+    # running inside the user's Obsidian app on the host machine — giving the
+    # chat model read/write access to the user's vault via the
+    # list_notes/search_notes/read_note/write_note/append_note/delete_note
+    # tools (see app/obsidian_service.py, OBSIDIAN_TOOLS in
+    # app/routers/chat.py). Same host.docker.internal reasoning as
+    # LMSTUDIO_BASE_URL above — the backend runs inside Docker, Obsidian
+    # runs on the host. Leave OBSIDIAN_API_KEY empty to disable the
+    # integration (same convention as IMAP_HOST/NTFY_TOPIC) — the tools are
+    # still offered to the model, but every call fails with a clear "not
+    # configured" error instead of a stack trace.
+    obsidian_base_url: str = "http://host.docker.internal:27123"
+    obsidian_api_key: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

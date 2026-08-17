@@ -33,6 +33,8 @@ class _FakeSettings:
     search_memory_top_k = 10
     search_meeting_summary_top_k = 10
     calendar_upcoming_days = 7
+    obsidian_base_url = "http://obsidian.test:27123"
+    obsidian_api_key = "test-obsidian-key"
     timezone = "America/Toronto"
     chat_history_max_messages = 40
     otel_exporter_otlp_endpoint = ""

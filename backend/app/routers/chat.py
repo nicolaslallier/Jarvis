@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app import calendar_service, task_service
+from app import calendar_service, obsidian_service, task_service
 from app.config import Settings, get_settings
 from app.db import async_session, get_db
 from app.embeddings import embed_text
@@ -72,7 +72,12 @@ SECRETARY_SYSTEM_PROMPT = (
     "parent_id set to the parent's id. Never tell the user an appointment "
     "or task was added, changed, or completed unless you actually called "
     "the matching tool in this turn and it returned success; if you didn't "
-    "call it, say so instead of confirming the change."
+    "call it, say so instead of confirming the change. You can search, "
+    "read, create, update, and delete notes in the user's Obsidian vault "
+    "only by calling the list_notes/search_notes/read_note/write_note/"
+    "append_note/delete_note tools — you have no other way to access "
+    "Obsidian. Only delete or overwrite a note when the user explicitly "
+    "asks you to; never do so as a side effect of another request."
 )
 
 TITLE_GENERATION_SYSTEM_PROMPT = (
@@ -241,7 +246,110 @@ TASK_TOOLS = [
     },
 ]
 
-TOOLS = CALENDAR_TOOLS + TASK_TOOLS
+# Same idea again, for the user's Obsidian vault (see app/obsidian_service.py).
+# Offered to the model unconditionally, same as CALENDAR_TOOLS/TASK_TOOLS —
+# if OBSIDIAN_API_KEY isn't configured, _execute_obsidian_tool_call below
+# returns a clear "not configured" error instead of a stack trace, rather
+# than this list being computed differently per request.
+OBSIDIAN_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notes",
+            "description": "List the files and subfolders directly inside a folder of the user's Obsidian vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dir_path": {
+                        "type": "string",
+                        "description": "Folder path relative to the vault root. Omit or leave empty for the vault root.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_notes",
+            "description": "Full-text search across every note in the user's Obsidian vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "context_length": {
+                        "type": "integer",
+                        "description": "How many characters of surrounding context to return per match. Defaults to 100.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_note",
+            "description": "Read the full markdown content of one note in the user's Obsidian vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": 'Note path relative to the vault root, e.g. "Journal/2026-08-17.md".',
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_note",
+            "description": "Create a new note, or replace an existing note's entire content, in the user's Obsidian vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Note path relative to the vault root."},
+                    "content": {"type": "string", "description": "Full markdown content of the note."},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_note",
+            "description": "Append markdown content to the end of an existing note in the user's Obsidian vault (creating it if it doesn't exist).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Note path relative to the vault root."},
+                    "content": {"type": "string", "description": "Markdown content to append."},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_note",
+            "description": "Permanently delete a note from the user's Obsidian vault. Cannot be undone — only use when the user explicitly asks to delete a note.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Note path relative to the vault root."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+]
+
+TOOLS = CALENDAR_TOOLS + TASK_TOOLS + OBSIDIAN_TOOLS
 
 
 # Fire-and-forget tasks (memory extraction, title generation) are started
@@ -492,12 +600,56 @@ async def _execute_task_tool_call(db: AsyncSession, name: str, arguments: dict) 
 
 _TASK_TOOL_NAMES = {"list_tasks", "create_task", "update_task", "complete_task"}
 
+_OBSIDIAN_TOOL_NAMES = {
+    "list_notes",
+    "search_notes",
+    "read_note",
+    "write_note",
+    "append_note",
+    "delete_note",
+}
+
+
+async def _execute_obsidian_tool_call(name: str, arguments: dict) -> dict:
+    """Runs one Obsidian tool call the model requested, same
+    error-as-payload convention as _execute_calendar_tool_call above — this
+    also catches obsidian_service.ObsidianNotConfigured (OBSIDIAN_API_KEY
+    unset), surfacing it as a normal tool error the model can relay rather
+    than a 500."""
+    try:
+        if name == "list_notes":
+            files = await obsidian_service.list_notes(arguments.get("dir_path", ""))
+            return {"files": files}
+        if name == "search_notes":
+            results = await obsidian_service.search_notes(
+                arguments["query"], context_length=arguments.get("context_length", 100)
+            )
+            return {"results": results}
+        if name == "read_note":
+            content = await obsidian_service.read_note(arguments["path"])
+            return {"path": arguments["path"], "content": content}
+        if name == "write_note":
+            await obsidian_service.write_note(arguments["path"], arguments["content"])
+            return {"path": arguments["path"], "written": True}
+        if name == "append_note":
+            await obsidian_service.append_note(arguments["path"], arguments["content"])
+            return {"path": arguments["path"], "appended": True}
+        if name == "delete_note":
+            await obsidian_service.delete_note(arguments["path"])
+            return {"path": arguments["path"], "deleted": True}
+        return {"error": f"unknown tool {name}"}
+    except Exception as exc:
+        logger.warning("Obsidian tool call %s failed", name, exc_info=True)
+        return {"error": str(exc)}
+
 
 async def _execute_tool_call(db: AsyncSession, name: str, arguments: dict) -> dict:
-    """Dispatches a model-requested tool call to the calendar or task
-    executor based on its name."""
+    """Dispatches a model-requested tool call to the calendar, task, or
+    Obsidian executor based on its name."""
     if name in _TASK_TOOL_NAMES:
         return await _execute_task_tool_call(db, name, arguments)
+    if name in _OBSIDIAN_TOOL_NAMES:
+        return await _execute_obsidian_tool_call(name, arguments)
     return await _execute_calendar_tool_call(db, name, arguments)
 
 
