@@ -22,9 +22,18 @@ class _FakeObsidianClient:
     method/url — each test only needs one call, so there's no need for the
     per-URL queueing test_chat.py's fake LM Studio client uses."""
 
-    def __init__(self, response: _FakeResponse | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        response: _FakeResponse | None = None,
+        error: Exception | None = None,
+        responses: list[_FakeResponse] | None = None,
+    ):
         self._response = response
         self._error = error
+        # Consumed in order, then `response` is returned for anything
+        # further — write_note/delete_note now make two calls (the
+        # pre-overwrite archive GET, then the PUT/DELETE).
+        self._responses = list(responses or [])
         self.calls: list[tuple[str, str, dict]] = []
 
     async def __aenter__(self) -> "_FakeObsidianClient":
@@ -37,11 +46,22 @@ class _FakeObsidianClient:
         self.calls.append((method, url, kwargs))
         if self._error is not None:
             raise self._error
+        if self._responses:
+            return self._responses.pop(0)
         return self._response
 
 
 def _patched(fake_client):
     return patch("app.obsidian_service.httpx.AsyncClient", return_value=fake_client)
+
+
+def _call(fake_client, method: str) -> tuple[str, str, dict]:
+    """First recorded call with the given HTTP method — indexing by
+    position would break every time the archive step adds a leading GET."""
+    return next(c for c in fake_client.calls if c[0] == method)
+
+
+_NOT_FOUND = _FakeResponse(404)
 
 
 @pytest.mark.asyncio
@@ -116,11 +136,10 @@ async def test_search_notes_posts_query_as_params():
 
 @pytest.mark.asyncio
 async def test_write_note_puts_content():
-    fake_client = _FakeObsidianClient(_FakeResponse(200))
+    fake_client = _FakeObsidianClient(_FakeResponse(200), responses=[_NOT_FOUND])
     with _patched(fake_client):
-        await obsidian_service.write_note("Notes/idea.md", "some content")
-    method, url, kwargs = fake_client.calls[0]
-    assert method == "PUT"
+        assert await obsidian_service.write_note("Notes/idea.md", "some content") is None
+    method, url, kwargs = _call(fake_client, "PUT")
     assert url == "http://obsidian.test:27123/vault/Notes/idea.md"
     assert kwargs["content"] == "some content"
     assert kwargs["headers"]["Content-Type"] == "text/markdown"
@@ -135,14 +154,16 @@ async def test_append_note_posts_content():
     assert method == "POST"
     assert url == "http://obsidian.test:27123/vault/Journal/today.md"
     assert kwargs["content"] == "more text"
+    # Appending is additive, so it makes exactly one call — no archive GET.
+    assert len(fake_client.calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_delete_note_calls_delete():
-    fake_client = _FakeObsidianClient(_FakeResponse(200))
+    fake_client = _FakeObsidianClient(_FakeResponse(200), responses=[_NOT_FOUND])
     with _patched(fake_client):
-        await obsidian_service.delete_note("old.md")
-    method, url, _ = fake_client.calls[0]
+        assert await obsidian_service.delete_note("old.md") is None
+    method, url, _ = _call(fake_client, "DELETE")
     assert method == "DELETE"
     assert url == "http://obsidian.test:27123/vault/old.md"
 
@@ -202,3 +223,66 @@ async def test_internal_dotdot_that_stays_inside_vault_is_allowed():
         await obsidian_service.read_note("a/../b.md")
     _, url, _ = fake_client.calls[0]
     assert url == "http://obsidian.test:27123/vault/a/../b.md"
+
+
+@pytest.mark.asyncio
+async def test_write_note_archives_existing_content_before_overwriting():
+    """Overwriting is the model's own decision and nothing else in the app
+    can undo it, so the previous content must land in TRASH_DIR first."""
+    fake_client = _FakeObsidianClient(
+        _FakeResponse(200), responses=[_FakeResponse(200, text="the old content")]
+    )
+    with _patched(fake_client):
+        archived = await obsidian_service.write_note("Notes/idea.md", "brand new content")
+
+    assert archived is not None
+    assert archived.startswith(f"{obsidian_service.TRASH_DIR}/")
+    # Flattened to a single segment so no intermediate folder is needed.
+    assert archived.endswith("-Notes_idea.md")
+
+    methods = [c[0] for c in fake_client.calls]
+    assert methods == ["GET", "PUT", "PUT"], "read the old content, archive it, then overwrite"
+
+    archive_call, overwrite_call = [c for c in fake_client.calls if c[0] == "PUT"]
+    assert archive_call[1].startswith(f"http://obsidian.test:27123/vault/{obsidian_service.TRASH_DIR}/")
+    assert archive_call[2]["content"] == "the old content"
+    assert overwrite_call[1] == "http://obsidian.test:27123/vault/Notes/idea.md"
+    assert overwrite_call[2]["content"] == "brand new content"
+
+
+@pytest.mark.asyncio
+async def test_delete_note_archives_content_before_deleting():
+    fake_client = _FakeObsidianClient(
+        _FakeResponse(204), responses=[_FakeResponse(200, text="please keep me")]
+    )
+    with _patched(fake_client):
+        archived = await obsidian_service.delete_note("Journal/2026-08-17.md")
+
+    assert archived is not None
+    methods = [c[0] for c in fake_client.calls]
+    assert methods == ["GET", "PUT", "DELETE"]
+    assert _call(fake_client, "PUT")[2]["content"] == "please keep me"
+
+
+@pytest.mark.asyncio
+async def test_archive_failure_aborts_the_destructive_call():
+    """Losing the new write is recoverable; losing the note isn't — so an
+    archive that fails must stop the delete rather than proceed without a
+    copy."""
+    fake_client = _FakeObsidianClient(
+        _FakeResponse(204), responses=[_FakeResponse(200, text="x"), _FakeResponse(500, text="boom")]
+    )
+    with _patched(fake_client), pytest.raises(ObsidianRequestError):
+        await obsidian_service.delete_note("Journal/2026-08-17.md")
+    assert "DELETE" not in [c[0] for c in fake_client.calls]
+
+
+@pytest.mark.asyncio
+async def test_notes_already_in_trash_are_not_re_archived():
+    """Archiving an archive would copy it forward on every touch, so a path
+    already under TRASH_DIR skips the archive step entirely."""
+    fake_client = _FakeObsidianClient(_FakeResponse(204))
+    with _patched(fake_client):
+        archived = await obsidian_service.delete_note(f"{obsidian_service.TRASH_DIR}/old-copy.md")
+    assert archived is None
+    assert [c[0] for c in fake_client.calls] == ["DELETE"]

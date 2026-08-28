@@ -15,9 +15,18 @@ call (same convention as app/embeddings.py, rather than a persistent client)
 and wraps transport-level failures (Obsidian not running, DNS, timeout) into
 ObsidianRequestError, so callers get one consistent exception type regardless
 of whether the failure was a bad response or a dead connection.
+
+The two destructive operations — write_note overwriting an existing note, and
+delete_note — first copy the note's current content into TRASH_DIR (see
+_archive_note below). Nothing else in this app can undo them: the chat model
+decides on its own to call these tools, and note content it reads back from
+the vault (a clipped web page, a synced shared note) is untrusted text that
+could try to talk it into a deletion. Keeping a copy is what makes that
+failure recoverable instead of permanent.
 """
 
 import logging
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
@@ -27,6 +36,12 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 OBSIDIAN_TIMEOUT_SECONDS = 15.0
+
+# Vault-relative folder the pre-overwrite/pre-delete copies land in. Named
+# with a leading underscore so it sorts away from real notes, and left
+# visible to list_notes/search_notes on purpose — the assistant needs to be
+# able to find a copy when the user asks to undo something.
+TRASH_DIR = "_jarvis-trash"
 
 
 class ObsidianNotConfigured(Exception):
@@ -90,6 +105,65 @@ async def _request(method: str, url: str, *, settings, headers: dict, **kwargs) 
         ) from exc
 
 
+def _trash_path(path: str) -> str:
+    """Flattens a vault path into one timestamped filename directly under
+    TRASH_DIR, so archiving never has to create intermediate folders and two
+    archives of the same note can't collide."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    return f"{TRASH_DIR}/{stamp}-{_confined_path(path).replace('/', '_')}"
+
+
+async def _read_or_none(settings, path: str) -> str | None:
+    """GETs a note's raw markdown, returning None (rather than raising) when
+    it doesn't exist — the "does this already have content?" question both
+    read_note and _archive_note need to ask."""
+    response = await _request(
+        "GET",
+        _vault_url(settings, path),
+        settings=settings,
+        headers=_headers(settings, Accept="text/markdown"),
+    )
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
+    return response.text
+
+
+async def _put_note(settings, path: str, content: str) -> None:
+    """The raw PUT behind write_note, without the archive step — used by
+    _archive_note itself, which must not recurse back into archiving."""
+    response = await _request(
+        "PUT",
+        _vault_url(settings, path),
+        settings=settings,
+        headers=_headers(settings, **{"Content-Type": "text/markdown"}),
+        content=content,
+    )
+    if response.status_code not in (200, 204):
+        raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
+
+
+async def _archive_note(settings, path: str) -> str | None:
+    """Copies the current content of `path` into TRASH_DIR before the caller
+    overwrites or deletes it. Returns the archive's vault path, or None if
+    there was nothing to archive (the note doesn't exist yet, or it already
+    lives in TRASH_DIR — archiving an archive would recurse forever).
+
+    A failure here propagates, deliberately aborting the destructive call
+    that asked for it: losing the write is recoverable, losing the note
+    isn't."""
+    if _confined_path(path).startswith(f"{TRASH_DIR}/"):
+        return None
+    existing = await _read_or_none(settings, path)
+    if existing is None:
+        return None
+    archive_path = _trash_path(path)
+    await _put_note(settings, archive_path, existing)
+    logger.info("Archived Obsidian note %s to %s before overwrite/delete", path, archive_path)
+    return archive_path
+
+
 async def list_notes(dir_path: str = "") -> list[str]:
     """Lists files/subdirectories directly under `dir_path` (vault root if
     empty). Subdirectory entries are returned with a trailing "/"."""
@@ -106,17 +180,10 @@ async def read_note(path: str) -> str:
     """Returns the raw markdown content of the note at `path` (relative to
     the vault root, e.g. "Journal/2026-08-17.md")."""
     settings = _settings_or_raise()
-    response = await _request(
-        "GET",
-        _vault_url(settings, path),
-        settings=settings,
-        headers=_headers(settings, Accept="text/markdown"),
-    )
-    if response.status_code == 404:
+    content = await _read_or_none(settings, path)
+    if content is None:
         raise ObsidianRequestError(f"No note found at {path}")
-    if response.status_code != 200:
-        raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
-    return response.text
+    return content
 
 
 async def search_notes(query: str, context_length: int = 100) -> list[dict]:
@@ -136,24 +203,20 @@ async def search_notes(query: str, context_length: int = 100) -> list[dict]:
     return response.json()
 
 
-async def write_note(path: str, content: str) -> None:
+async def write_note(path: str, content: str) -> str | None:
     """Creates the note at `path` if it doesn't exist, or overwrites its
-    entire content if it does."""
+    entire content if it does. Returns the TRASH_DIR path the previous
+    content was copied to, or None if the note is new (nothing to archive)."""
     settings = _settings_or_raise()
-    response = await _request(
-        "PUT",
-        _vault_url(settings, path),
-        settings=settings,
-        headers=_headers(settings, **{"Content-Type": "text/markdown"}),
-        content=content,
-    )
-    if response.status_code not in (200, 204):
-        raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
+    archived_to = await _archive_note(settings, path)
+    await _put_note(settings, path, content)
+    return archived_to
 
 
 async def append_note(path: str, content: str) -> None:
     """Appends `content` to the end of the note at `path`, creating it if
-    it doesn't exist yet."""
+    it doesn't exist yet. Purely additive, so unlike write_note/delete_note
+    it needs no archive copy."""
     settings = _settings_or_raise()
     response = await _request(
         "POST",
@@ -166,10 +229,14 @@ async def append_note(path: str, content: str) -> None:
         raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
 
 
-async def delete_note(path: str) -> None:
+async def delete_note(path: str) -> str | None:
+    """Deletes the note at `path`. Returns the TRASH_DIR path its content
+    was copied to first, or None if it was already empty/nonexistent."""
     settings = _settings_or_raise()
+    archived_to = await _archive_note(settings, path)
     response = await _request(
         "DELETE", _vault_url(settings, path), settings=settings, headers=_headers(settings)
     )
     if response.status_code not in (200, 204):
         raise ObsidianRequestError(f"Obsidian returned {response.status_code}: {response.text}")
+    return archived_to
